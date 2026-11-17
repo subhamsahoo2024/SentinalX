@@ -1,0 +1,18 @@
+[project]
+name = "sentinel-sdk"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "subhamsahoo2024", email = "subhamsahoo12346@outlook.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "opentelemetry-api>=1.45.2",
+    "pydantic>=2.14.3",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.12,<0.10.0"]
+build-backend = "uv_build"

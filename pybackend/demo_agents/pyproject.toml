@@ -1,0 +1,12 @@
+[project]
+name = "sentinel-demo"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "sentinel-sdk",
+]
+
+[tool.uv.sources]
+sentinel-sdk = { workspace = true }
