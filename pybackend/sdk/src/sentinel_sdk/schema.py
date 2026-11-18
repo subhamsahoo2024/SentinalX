@@ -1,6 +1,7 @@
 from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -93,14 +94,13 @@ class TelemetryBatchRequest(BaseModel):
 
 
 __all__ = [
-    "SpanType",
-    "SpanStatus",
+    "CanonicalEventV1",
     "CostBasis",
-    "ModelInfo",
-    "TokenUsage",
     "CostInfo",
     "ErrorInfo",
-    "CanonicalEventV1",
+    "ModelInfo",
+    "SpanStatus",
+    "SpanType",
     "TelemetryBatchRequest",
+    "TokenUsage",
 ]
-
