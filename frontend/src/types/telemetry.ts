@@ -90,36 +90,66 @@ export interface LineageNodeDTO {
   id: string;
   span_id: string;
   parent_span_id?: string | null;
-  run_id?: string | null;
-  agent_id?: string | null;
-  agent_name?: string | null;
-  span_type: SpanType;
+  agent_id: string;
+  attempt_number?: number;
+  span_type: SpanType | string;
   operation_name: string;
-  status: SpanStatus;
-  started_at?: string | null;
+  status: SpanStatus | string;
+  started_at: string;
   ended_at?: string | null;
   duration_ms?: number | null;
-  model?: ModelInfo | null;
-  usage?: TokenUsage | null;
-  cost?: CostInfo;
-  error?: ErrorInfo | null;
-  data?: Record<string, unknown>;
+  model_provider?: string | null;
+  model_name?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  direct_cost_usd?: number | null;
+  cost_basis?: CostBasis | string;
+  is_root_cause?: boolean;
+  error_class?: string | null;
+  error_message?: string | null;
+  attributes?: Record<string, unknown>;
 }
 
 export interface LineageEdgeDTO {
   id: string;
   source: string;
   target: string;
-  edge_type?: string | null;
-  label?: string | null;
-  data?: Record<string, unknown>;
+  is_failed_path: boolean;
 }
 
 export interface LineageGraphDTO {
   run_id: string;
+  trace_id: string;
+  status: SpanStatus | string;
   nodes: LineageNodeDTO[];
   edges: LineageEdgeDTO[];
-  root_span_id?: string | null;
+  orphan_span_ids: string[];
+}
+
+export interface SpanDTO {
+  span_id: string;
+  trace_id: string;
+  parent_span_id?: string | null;
+  run_id: string;
+  agent_id: string;
+  attempt_number: number;
+  span_type: SpanType | string;
+  operation_name: string;
+  status: SpanStatus | string;
+  started_at: string;
+  ended_at?: string | null;
+  duration_ms?: number | null;
+  model_provider?: string | null;
+  model_name?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  cached_tokens?: number | null;
+  direct_cost_usd?: number | null;
+  cost_basis?: CostBasis | string;
+  is_root_cause?: boolean;
+  error_class?: string | null;
+  error_message?: string | null;
+  attributes?: Record<string, unknown>;
 }
 
 export type HealthStatus = 'ACTIVE' | 'IDLE' | 'OFFLINE';

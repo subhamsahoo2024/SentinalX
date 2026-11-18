@@ -1,4 +1,6 @@
 from datetime import datetime
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -9,7 +11,16 @@ from sentinel_backend.models.agent import Agent
 from sentinel_backend.models.alert import Alert
 from sentinel_backend.models.run import Run
 from sentinel_backend.models.span import Span
-from sentinel_backend.schemas.telemetry import RunSummaryDTO, SpanStatus
+from sentinel_backend.schemas.telemetry import (
+    LineageGraphDTO,
+    RunSummaryDTO,
+    SpanDTO,
+    SpanStatus,
+)
+from sentinel_backend.services.lineage_builder import (
+    build_run_lineage,
+    get_run_events,
+)
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
@@ -32,12 +43,12 @@ class RunListItemResponse(BaseModel):
 
 @router.get("", response_model=list[RunListItemResponse])
 async def list_runs(
-    status: str | None = Query(default=None),
-    team: str | None = Query(default=None),
-    agent_id: str | None = Query(default=None),
-    limit: int = Query(default=50, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-    db: AsyncSession = Depends(get_db),
+    status: Annotated[str | None, Query()] = None,
+    team: Annotated[str | None, Query()] = None,
+    agent_id: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,  # type: ignore[assignment]
 ) -> list[RunListItemResponse]:
     """List runs ordered by started_at descending, supporting filtering by
 
@@ -104,7 +115,7 @@ async def list_runs(
 @router.get("/{run_id}", response_model=RunSummaryDTO)
 async def get_run_details(
     run_id: str,
-    db: AsyncSession = Depends(get_db),
+    db: Annotated[AsyncSession, Depends(get_db)],
 ) -> RunSummaryDTO:
     """Retrieve detailed RunSummaryDTO for a given run_id or return 404."""
     run_obj = await db.get(Run, run_id)
@@ -171,5 +182,22 @@ async def get_run_details(
     )
 
 
-__all__ = ["router"]
+@router.get("/{run_id}/lineage", response_model=LineageGraphDTO)
+async def get_run_lineage(
+    run_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> LineageGraphDTO:
+    """Build and return an acyclic DAG LineageGraphDTO for a given run_id."""
+    return await build_run_lineage(db, run_id)
 
+
+@router.get("/{run_id}/events", response_model=list[SpanDTO])
+async def get_run_events_endpoint(
+    run_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[SpanDTO]:
+    """Retrieve all spans for a run ordered chronologically by started_at ASC for audit replay."""
+    return await get_run_events(db, run_id)
+
+
+__all__ = ["router"]

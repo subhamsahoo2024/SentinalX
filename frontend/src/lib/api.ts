@@ -1,8 +1,10 @@
 import {
   AgentResponse,
   FetchRunsParams,
+  LineageGraphDTO,
   RunListItemResponse,
   RunSummaryDTO,
+  SpanDTO,
 } from '@/types/telemetry';
 
 const API_BASE_URL = (
@@ -65,4 +67,37 @@ export async function fetchRunById(runId: string): Promise<RunSummaryDTO> {
   }
   return res.json();
 }
+
+/**
+ * Fetch LineageGraphDTO for a given run ID.
+ */
+export async function fetchRunLineage(runId: string): Promise<LineageGraphDTO> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/runs/${encodeURIComponent(runId)}/lineage`,
+    {
+      cache: 'no-store',
+    }
+  );
+  if (!res.ok) {
+    throw new Error(`Failed to fetch lineage for run ${runId}: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
+/**
+ * Fetch chronological spans for audit replay timeline by run ID.
+ */
+export async function fetchRunEvents(runId: string): Promise<SpanDTO[]> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/runs/${encodeURIComponent(runId)}/events`,
+    {
+      cache: 'no-store',
+    }
+  );
+  if (!res.ok) {
+    throw new Error(`Failed to fetch events for run ${runId}: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
 
