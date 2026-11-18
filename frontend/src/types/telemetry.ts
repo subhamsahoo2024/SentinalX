@@ -122,3 +122,53 @@ export interface LineageGraphDTO {
   root_span_id?: string | null;
 }
 
+export type HealthStatus = 'ACTIVE' | 'IDLE' | 'OFFLINE';
+
+export interface AgentResponse {
+  agent_id: string;
+  display_name: string;
+  framework: string;
+  team: string;
+  environment: string;
+  declared_tools: unknown[];
+  status: string;
+  last_seen_at: string;
+  health_status: HealthStatus;
+  active_runs_count: number;
+}
+
+export interface RunListItemResponse {
+  run_id: string;
+  trace_id: string;
+  root_agent_id: string | null;
+  team: string;
+  status: SpanStatus | string;
+  started_at: string;
+  ended_at: string | null;
+  last_event_at: string;
+  total_tokens: number;
+  total_cost_usd: number | null;
+  cost_status: CostBasis | string;
+  span_count: number;
+  alert_count: number;
+}
+
+export interface FetchRunsParams {
+  status?: string;
+  team?: string;
+  agent_id?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface FleetUpdatedPayload {
+  affected_run_ids?: string[];
+  affected_agent_ids?: string[];
+  event_count?: number;
+}
+
+export interface WebSocketMessage<T = unknown> {
+  type: string;
+  timestamp: string;
+  data: T;
+}
