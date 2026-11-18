@@ -1700,7 +1700,7 @@ requires-dist = [
 [[package]]
 name = "sentinel-demo"
 version = "0.1.0"
-source = { virtual = "demo_agents" }
+source = { editable = "demo_agents" }
 dependencies = [
     { name = "sentinel-sdk" },
 ]
