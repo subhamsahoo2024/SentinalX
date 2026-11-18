@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -9,11 +10,20 @@ from sentinel_backend.config import settings
 logger = logging.getLogger(__name__)
 
 _redis_pool: aioredis.ConnectionPool | None = None
+_pool_loop: asyncio.AbstractEventLoop | None = None
 
 
 def get_redis_pool() -> aioredis.ConnectionPool:
-    global _redis_pool
-    if _redis_pool is None:
+    global _redis_pool, _pool_loop
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+
+    if _redis_pool is None or (
+        current_loop is not None and _pool_loop != current_loop
+    ):
+        _pool_loop = current_loop
         _redis_pool = aioredis.ConnectionPool.from_url(
             settings.REDIS_URL,
             decode_responses=True,
@@ -28,10 +38,11 @@ def get_redis_client() -> aioredis.Redis:
 
 
 async def close_redis() -> None:
-    global _redis_pool
+    global _redis_pool, _pool_loop
     if _redis_pool is not None:
         await _redis_pool.disconnect()
         _redis_pool = None
+        _pool_loop = None
 
 
 async def publish_event(
@@ -96,4 +107,3 @@ __all__ = [
     "publish_event",
     "subscribe_channel",
 ]
-
