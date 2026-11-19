@@ -1,13 +1,22 @@
+import asyncio
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from sentinel_backend.api import agents, approvals, runs, telemetry, ws
+from sentinel_backend.api import (
+    agents,
+    alerts,
+    approvals,
+    runs,
+    telemetry,
+    ws,
+)
 from sentinel_backend.db.session import async_session_maker, engine
+from sentinel_backend.services.anomaly_engine import stall_watchdog_loop
 from sentinel_backend.services.redis_bus import (
     close_redis,
     get_redis_client,
@@ -19,10 +28,20 @@ from sentinel_backend.services.redis_bus import (
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize Redis connection pool
     get_redis_pool()
-    yield
-    # Gracefully shut down Redis connection pool and DB engine
-    await close_redis()
-    await engine.dispose()
+    watchdog_task = asyncio.create_task(
+        stall_watchdog_loop(async_session_maker)
+    )
+    try:
+        yield
+    finally:
+        watchdog_task.cancel()
+        try:
+            await watchdog_task
+        except asyncio.CancelledError:
+            pass
+        # Gracefully shut down Redis connection pool and DB engine
+        await close_redis()
+        await engine.dispose()
 
 
 app = FastAPI(
@@ -58,6 +77,7 @@ app.include_router(telemetry.router)
 app.include_router(agents.router)
 app.include_router(runs.router)
 app.include_router(approvals.router)
+app.include_router(alerts.router)
 app.include_router(ws.router)
 
 
@@ -75,7 +95,7 @@ async def health_check() -> JSONResponse:
     try:
         async with async_session_maker() as session:
             await session.execute(text("SELECT 1"))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         health["postgres"] = f"error: {e}"
         health["status"] = "degraded"
         status_code = status.HTTP_503_SERVICE_UNAVAILABLE
@@ -84,7 +104,7 @@ async def health_check() -> JSONResponse:
     try:
         client = get_redis_client()
         await client.ping()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         health["redis"] = f"error: {e}"
         health["status"] = "degraded"
         status_code = status.HTTP_503_SERVICE_UNAVAILABLE

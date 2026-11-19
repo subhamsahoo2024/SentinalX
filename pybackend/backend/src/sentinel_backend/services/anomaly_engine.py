@@ -131,7 +131,7 @@ async def evaluate_run_anomalies(
     - Rule 2: Token Budget Overrun (BUDGET_EXCEEDED)
     - Rule 3: Cascading Failure & Root-Cause Attribution (CASCADE_FAILURE)
     """
-    run = await db.get(Run, run_id)
+    run = await db.get(Run, run_id, populate_existing=True)
     if not run:
         logger.warning(
             "Cannot evaluate anomalies: run '%s' not found", run_id

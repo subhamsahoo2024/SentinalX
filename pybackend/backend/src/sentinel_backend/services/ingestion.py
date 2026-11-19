@@ -1,8 +1,9 @@
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
+from sentinel_sdk.schema import CanonicalEventV1, SpanStatus
 from sqlalchemy import case, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sentinel_backend.models.agent import Agent
 from sentinel_backend.models.run import Run
 from sentinel_backend.models.span import Span
+from sentinel_backend.services.anomaly_engine import evaluate_run_anomalies
 from sentinel_backend.services.redis_bus import publish_event
-from sentinel_sdk.schema import CanonicalEventV1, SpanStatus
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ async def ingest_telemetry_batch(
 
     # 1. Sort incoming events by started_at ascending
     sorted_events = sorted(events, key=lambda e: e.started_at)
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     affected_run_ids: set[str] = set()
 
     for event in sorted_events:
@@ -241,6 +242,10 @@ async def ingest_telemetry_batch(
                 total_cost_usd=total_cost,
             )
         )
+
+    # Evaluate anomalies for affected runs before committing transaction
+    for r_id in affected_run_ids:
+        await evaluate_run_anomalies(db, r_id)
 
     # Commit DB transaction
     await db.commit()
