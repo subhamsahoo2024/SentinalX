@@ -1,5 +1,6 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -36,7 +37,7 @@ async def list_agents(
     health_status ("ACTIVE" <= 60s, "IDLE" <= 15m, else "OFFLINE") and
     active_runs_count.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     active_runs_cond = Run.status.not_in(TERMINAL_RUN_STATUSES)
 
     query = (
@@ -59,7 +60,7 @@ async def list_agents(
     for agent, active_runs_count in rows:
         last_seen = agent.last_seen_at
         if last_seen.tzinfo is None:
-            last_seen = last_seen.replace(tzinfo=timezone.utc)
+            last_seen = last_seen.replace(tzinfo=UTC)
 
         diff_seconds = (now - last_seen).total_seconds()
         if diff_seconds <= 60:

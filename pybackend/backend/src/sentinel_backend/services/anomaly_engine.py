@@ -233,7 +233,7 @@ async def evaluate_run_anomalies(
     # -------------------------------------------------------------------------
     # Rule 2 — Token Budget Overrun (BUDGET_EXCEEDED)
     # -------------------------------------------------------------------------
-    if run.total_tokens > settings.RUN_TOKEN_BUDGET:
+    if run.total_tokens is not None and run.total_tokens > settings.RUN_TOKEN_BUDGET:
         origin_span_id: str | None = None
         if spans:
             highest_span = max(
@@ -301,19 +301,37 @@ async def evaluate_run_anomalies(
                 else:
                     break
 
-            origin_candidate = highest
+            # Check if highest ancestor has failed leaf tool descendants that caused the cascade
+            failed_tool_descendants = [
+                d
+                for d in _get_descendants(highest.span_id, children_by_parent)
+                if str(d.status).upper() in FAILED_SPAN_STATUSES
+                and str(d.span_type).upper() == "TOOL"
+            ]
+            if failed_tool_descendants:
+                origin_candidate = min(
+                    failed_tool_descendants,
+                    key=lambda x: _ensure_utc(x.started_at),
+                )
+            else:
+                origin_candidate = highest
 
             # Check if child failed due to upstream sibling tool failure under same parent
             if s.parent_span_id and s.parent_span_id in span_by_id:
-                siblings = children_by_parent.get(s.parent_span_id, [])
-                failed_siblings = [
+                siblings = [
+                    sib
+                    for sib in children_by_parent.get(s.parent_span_id, [])
+                    if sib.span_id != s.span_id
+                ]
+                failed_tool_siblings = [
                     sib
                     for sib in siblings
                     if str(sib.status).upper() in FAILED_SPAN_STATUSES
+                    and str(sib.span_type).upper() == "TOOL"
                 ]
-                if failed_siblings:
+                if failed_tool_siblings:
                     earliest_sib = min(
-                        failed_siblings,
+                        failed_tool_siblings,
                         key=lambda x: _ensure_utc(x.started_at),
                     )
                     if _ensure_utc(earliest_sib.started_at) < _ensure_utc(
@@ -322,6 +340,13 @@ async def evaluate_run_anomalies(
                         origin_candidate = earliest_sib
 
             origin_map[origin_candidate.span_id] = origin_candidate
+
+        # If an origin candidate is an ancestor of another origin candidate, prefer the leaf origin
+        origin_ids = set(origin_map.keys())
+        for o_id in list(origin_map.keys()):
+            descendants = _get_descendants(o_id, children_by_parent)
+            if any(d.span_id in origin_ids for d in descendants):
+                origin_map.pop(o_id, None)
 
         # Mark is_root_cause = True on origin spans in DB
         for origin_span in origin_map.values():
@@ -334,6 +359,17 @@ async def evaluate_run_anomalies(
             impacted_set: set[str] = {origin_span.span_id}
             for d in descendants:
                 impacted_set.add(d.span_id)
+
+            # Include failed ancestors who failed due to this root cause
+            curr_ancestor = origin_span
+            while (
+                curr_ancestor.parent_span_id
+                and curr_ancestor.parent_span_id in span_by_id
+            ):
+                p_span = span_by_id[curr_ancestor.parent_span_id]
+                if str(p_span.status).upper() in FAILED_SPAN_STATUSES:
+                    impacted_set.add(p_span.span_id)
+                curr_ancestor = p_span
 
             origin_started = _ensure_utc(origin_span.started_at)
             for s in spans:

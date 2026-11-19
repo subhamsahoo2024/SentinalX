@@ -7,8 +7,8 @@ from sentinel_backend.db.session import (
 
 __all__ = [
     "Base",
-    "engine",
     "async_session_maker",
+    "engine",
     "get_db",
 ]
 

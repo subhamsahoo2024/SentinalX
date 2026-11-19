@@ -8,11 +8,11 @@ from sentinel_backend.models.span import Span
 
 __all__ = [
     "Agent",
+    "Alert",
+    "Approval",
+    "AuditEvent",
+    "PricingVersion",
     "Run",
     "Span",
-    "Approval",
-    "Alert",
-    "PricingVersion",
-    "AuditEvent",
 ]
 
