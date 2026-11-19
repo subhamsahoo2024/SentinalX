@@ -20,7 +20,7 @@ import { LineageGraphDTO, LineageNodeDTO } from '@/types/telemetry';
 import { SpanNode, type SpanNodeType } from './SpanNode';
 
 const NODE_WIDTH = 256;
-const NODE_HEIGHT = 100;
+const NODE_HEIGHT = 125;
 
 const nodeTypes: NodeTypes = {
   spanNode: SpanNode,

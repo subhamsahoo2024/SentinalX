@@ -3,8 +3,11 @@ import {
   AlertDTO,
   ApprovalDTO,
   AuditEventDTO,
+  CostSummaryDTO,
   FetchRunsParams,
   LineageGraphDTO,
+  PricingVersionCreate,
+  PricingVersionDTO,
   RunListItemResponse,
   RunSummaryDTO,
   SpanDTO,
@@ -228,5 +231,63 @@ export async function acknowledgeAlert(alertId: string): Promise<AlertDTO> {
   }
   return res.json();
 }
+
+/**
+ * Fetch fleet cost summary and slice breakdowns by agent, team, model, and run.
+ */
+export async function fetchCostSummary(): Promise<CostSummaryDTO> {
+  const res = await fetch(`${API_BASE_URL}/api/costs/summary`, {
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch cost summary: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
+/**
+ * Fetch all pricing version rows ordered by effective_from descending.
+ */
+export async function fetchPricingVersions(): Promise<PricingVersionDTO[]> {
+  const res = await fetch(`${API_BASE_URL}/api/costs/pricing`, {
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch pricing versions: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
+/**
+ * Publish a new versioned pricing rate (requires approver/admin actor role).
+ */
+export async function createPricingVersion(
+  payload: PricingVersionCreate,
+  actorRole: string = 'approver'
+): Promise<PricingVersionDTO> {
+  const res = await fetch(`${API_BASE_URL}/api/costs/pricing`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Actor-Id': 'lead-operator',
+      'X-Actor-Role': actorRole,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let errorDetail = `${res.status} ${res.statusText}`;
+    try {
+      const errJson = await res.json();
+      if (errJson && errJson.detail) {
+        errorDetail = errJson.detail;
+      }
+    } catch {
+      // fallback
+    }
+    throw new Error(errorDetail);
+  }
+  return res.json();
+}
+
 
 

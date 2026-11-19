@@ -27,6 +27,9 @@ export const SpanNode = memo(function SpanNode({
     duration_ms,
     input_tokens,
     output_tokens,
+    direct_cost_usd,
+    rolled_up_cost_usd,
+    cost_basis,
     is_root_cause,
   } = data;
 
@@ -138,6 +141,53 @@ export const SpanNode = memo(function SpanNode({
           </span>
         )}
       </div>
+
+      {/* Cost Metric Row */}
+      {(span_type === 'LLM' || span_type === 'AGENT' || cost_basis === 'UNKNOWN') && (
+        <div className="mt-2 flex items-center justify-between text-[11px] font-mono">
+          <span className="text-slate-400 text-[10px] flex items-center gap-1">
+            <Coins className="w-3 h-3 text-slate-400" />
+            {span_type === 'AGENT' ? 'Subtree Spend:' : span_type === 'LLM' ? 'Direct Cost:' : 'Attribution:'}
+          </span>
+          {span_type === 'LLM' ? (
+            cost_basis === 'UNKNOWN' || direct_cost_usd === null || direct_cost_usd === undefined ? (
+              <span
+                className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium border bg-amber-500/15 text-amber-300 border-amber-500/40"
+                title="Missing token usage or pricing model metadata"
+              >
+                Cost: Unknown
+              </span>
+            ) : (
+              <span
+                className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium border bg-emerald-500/15 text-emerald-300 border-emerald-500/30"
+                title={`Direct cost: $${Number(direct_cost_usd).toFixed(6)}`}
+              >
+                ${Number(direct_cost_usd).toFixed(4)}
+              </span>
+            )
+          ) : span_type === 'AGENT' ? (
+            rolled_up_cost_usd !== null && rolled_up_cost_usd !== undefined ? (
+              <span
+                className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium border bg-indigo-500/15 text-indigo-300 border-indigo-500/30"
+                title={`Subtree spend: $${Number(rolled_up_cost_usd).toFixed(6)}`}
+              >
+                Σ ${Number(rolled_up_cost_usd).toFixed(4)}
+              </span>
+            ) : (
+              <span
+                className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium border bg-amber-500/15 text-amber-300 border-amber-500/40"
+                title="Subtree costs unknown"
+              >
+                Cost: Unknown
+              </span>
+            )
+          ) : cost_basis === 'UNKNOWN' ? (
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-mono font-medium border bg-amber-500/15 text-amber-300 border-amber-500/40">
+              Cost: Unknown
+            </span>
+          ) : null}
+        </div>
+      )}
 
       {/* Footer Row: Status Pill, Duration, Token Count Badge */}
       <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between gap-1 text-[11px]">

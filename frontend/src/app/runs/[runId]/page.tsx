@@ -11,6 +11,7 @@ import {
   Check,
   RefreshCw,
   Bot,
+  Activity,
 } from 'lucide-react';
 import { fetchAlerts, fetchRunById, fetchRunLineage, acknowledgeAlert } from '@/lib/api';
 import { useWebSocketStream } from '@/hooks/useWebSocketStream';
@@ -18,9 +19,11 @@ import { LineageGraph } from '@/components/lineage/LineageGraph';
 import { SpanInspector } from '@/components/lineage/SpanInspector';
 import { RunAlertsBanner } from '@/components/lineage/RunAlertsBanner';
 import { LiveConnectionBadge } from '@/components/LiveConnectionBadge';
+import { TimelineReplay } from '@/components/replay/TimelineReplay';
 import { cn } from '@/lib/cn';
 import {
   AlertDTO,
+  LineageEdgeDTO,
   LineageGraphDTO,
   LineageNodeDTO,
   RunSummaryDTO,
@@ -41,6 +44,34 @@ function RunDetailContent({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copiedRunId, setCopiedRunId] = useState(false);
+  const [isReplaying, setIsReplaying] = useState(false);
+  const [replayedNodes, setReplayedNodes] = useState<LineageNodeDTO[]>([]);
+  const [replayedEdges, setReplayedEdges] = useState<LineageEdgeDTO[]>([]);
+
+  const handleReplayFrame = useCallback(
+    (
+      nodes: LineageNodeDTO[],
+      edges: LineageEdgeDTO[],
+      activeNode: LineageNodeDTO | null
+    ) => {
+      setReplayedNodes(nodes);
+      setReplayedEdges(edges);
+      if (activeNode) {
+        setSelectedSpan(activeNode);
+      }
+    },
+    []
+  );
+
+  const displayGraph = useMemo(() => {
+    if (!graph) return null;
+    if (!isReplaying) return graph;
+    return {
+      ...graph,
+      nodes: replayedNodes,
+      edges: replayedEdges,
+    };
+  }, [isReplaying, graph, replayedNodes, replayedEdges]);
 
   const refreshRunData = useCallback(async () => {
     if (!runId) return;
@@ -277,6 +308,23 @@ function RunDetailContent({
             </>
           )}
 
+          {/* Replay Execution Toggle Button */}
+          {graph && graph.nodes.length > 0 && (
+            <button
+              onClick={() => setIsReplaying((prev) => !prev)}
+              className={cn(
+                'flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-medium border transition-colors',
+                isReplaying
+                  ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 ring-1 ring-cyan-500/30'
+                  : 'bg-slate-800/80 text-slate-300 border-slate-700/60 hover:bg-slate-700 hover:text-white'
+              )}
+              title="Toggle Chronological Execution Replay"
+            >
+              <Activity className="w-3.5 h-3.5 text-cyan-400" />
+              <span>{isReplaying ? 'Exit Replay' : 'Replay Execution'}</span>
+            </button>
+          )}
+
           {/* Refresh Button */}
           <button
             onClick={refreshRunData}
@@ -300,6 +348,15 @@ function RunDetailContent({
           onAcknowledgeAlert={handleAcknowledgeAlert}
         />
 
+        {isReplaying && graph && graph.nodes.length > 0 && (
+          <TimelineReplay
+            allNodes={graph.nodes}
+            allEdges={graph.edges}
+            onReplayFrame={handleReplayFrame}
+            onExitReplay={() => setIsReplaying(false)}
+          />
+        )}
+
         <div className="flex-1 w-full relative min-h-0 overflow-hidden">
           {loading && !graph ? (
             <div className="flex flex-col items-center justify-center h-full w-full bg-slate-950/80 text-slate-400 font-mono text-sm">
@@ -319,9 +376,9 @@ function RunDetailContent({
                 </button>
               </div>
             </div>
-          ) : graph ? (
+          ) : displayGraph ? (
             <LineageGraph
-              graph={graph}
+              graph={displayGraph}
               selectedSpanId={selectedSpan?.id}
               onSelectSpan={setSelectedSpan}
               impactedSpanIds={impactedSpanIds}
