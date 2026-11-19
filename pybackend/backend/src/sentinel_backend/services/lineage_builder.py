@@ -14,6 +14,7 @@ from sentinel_backend.schemas.telemetry import (
 FAILED_SPAN_STATUSES: set[str] = {
     "FAILED",
     "TIMED_OUT",
+    "STALLED",
 }
 
 
@@ -63,6 +64,9 @@ async def build_run_lineage(db: AsyncSession, run_id: str) -> LineageGraphDTO:
             else False
         )
         attempt_number = span.attempt_number if span.attempt_number is not None else 1
+        node_status = span.status
+        if run_obj.status == "STALLED" and str(node_status).upper() in ("RUNNING", "QUEUED"):
+            node_status = "STALLED"
 
         node = LineageNodeDTO(
             id=span.span_id,
@@ -72,9 +76,9 @@ async def build_run_lineage(db: AsyncSession, run_id: str) -> LineageGraphDTO:
             attempt_number=attempt_number,
             span_type=span.span_type,
             operation_name=span.operation_name,
-            status=span.status,
+            status=node_status,
             started_at=span.started_at,
-            ended_at=span.ended_at,
+            ended_at=span.ended_at or (span.started_at if node_status == "STALLED" else None),
             duration_ms=duration_ms,
             model_provider=span.model_provider,
             model_name=span.model_name,

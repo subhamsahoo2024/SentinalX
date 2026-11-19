@@ -1,4 +1,5 @@
 from sentinel_sdk.adapters.langchain_cb import SentinelLangChainCallback
+from sentinel_sdk.config import find_env_file, load_sdk_env
 from sentinel_sdk.context import (
     RunContext,
     RunContextManager,
@@ -52,9 +53,11 @@ __all__ = [
     "TelemetryBatchRequest",
     "TokenUsage",
     "configure_sentinel",
+    "find_env_file",
     "flush",
     "gate_tool",
     "get_exporter",
+    "load_sdk_env",
     "redact_payload",
     "start_run",
     "trace_agent",

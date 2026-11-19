@@ -1,12 +1,14 @@
 'use client';
 
-import { useMemo, useCallback } from 'react';
+import { useMemo, useCallback, useEffect } from 'react';
 import {
   ReactFlow,
   Background,
   Controls,
   MiniMap,
   MarkerType,
+  useNodesState,
+  useEdgesState,
   type Edge,
   type NodeTypes,
   type NodeMouseHandler,
@@ -28,12 +30,14 @@ interface LineageGraphProps {
   graph: LineageGraphDTO;
   selectedSpanId?: string | null;
   onSelectSpan: (span: LineageNodeDTO | null) => void;
+  impactedSpanIds?: string[];
 }
 
 function getLayoutedElements(
   nodes: LineageNodeDTO[],
   edges: LineageGraphDTO['edges'],
-  selectedSpanId?: string | null
+  selectedSpanId?: string | null,
+  impactedSpanIds?: string[]
 ): { flowNodes: SpanNodeType[]; flowEdges: Edge[] } {
   if (nodes.length === 0) {
     return { flowNodes: [], flowEdges: [] };
@@ -70,6 +74,11 @@ function getLayoutedElements(
       position: { x, y },
       data: node,
       selected: node.id === selectedSpanId,
+      width: NODE_WIDTH,
+      height: NODE_HEIGHT,
+      initialWidth: NODE_WIDTH,
+      initialHeight: NODE_HEIGHT,
+      style: { width: NODE_WIDTH, height: NODE_HEIGHT, visibility: 'visible' },
     };
   });
 
@@ -77,8 +86,12 @@ function getLayoutedElements(
     const targetNode = nodeMap.get(edge.target);
     const sourceNode = nodeMap.get(edge.source);
 
-    const isFailed =
+    const isBlastRadius =
       edge.is_failed_path ||
+      Boolean(impactedSpanIds && impactedSpanIds.includes(edge.target));
+
+    const isFailed =
+      isBlastRadius ||
       targetNode?.status === 'FAILED' ||
       targetNode?.status === 'TIMED_OUT';
 
@@ -87,17 +100,29 @@ function getLayoutedElements(
 
     const isAwaiting = targetNode?.status === 'AWAITING_APPROVAL';
 
+    const isStalled =
+      targetNode?.status === 'STALLED' || sourceNode?.status === 'STALLED';
+
     let strokeColor = '#475569'; // slate-600
     let animated = false;
+    let strokeWidth = isFailed || isRunning ? 2 : 1.5;
 
-    if (isFailed) {
+    if (isBlastRadius) {
+      strokeColor = '#f43f5e'; // thick animated crimson stroke
+      strokeWidth = 2.5;
+      animated = true;
+    } else if (isFailed) {
       strokeColor = '#f43f5e'; // crimson / rose-500
+      strokeWidth = 2;
     } else if (isRunning) {
       strokeColor = '#38bdf8'; // sky-400
       animated = true;
     } else if (isAwaiting) {
       strokeColor = '#f59e0b'; // amber-500
       animated = true;
+    } else if (isStalled) {
+      strokeColor = '#a855f7'; // purple-500
+      strokeWidth = 2;
     }
 
     return {
@@ -108,7 +133,7 @@ function getLayoutedElements(
       animated,
       style: {
         stroke: strokeColor,
-        strokeWidth: isFailed || isRunning ? 2 : 1.5,
+        strokeWidth,
       },
       markerEnd: {
         type: MarkerType.ArrowClosed,
@@ -126,11 +151,26 @@ export function LineageGraph({
   graph,
   selectedSpanId,
   onSelectSpan,
+  impactedSpanIds,
 }: LineageGraphProps) {
   const { flowNodes, flowEdges } = useMemo(
-    () => getLayoutedElements(graph.nodes, graph.edges, selectedSpanId),
-    [graph.nodes, graph.edges, selectedSpanId]
+    () =>
+      getLayoutedElements(
+        graph.nodes,
+        graph.edges,
+        selectedSpanId,
+        impactedSpanIds
+      ),
+    [graph.nodes, graph.edges, selectedSpanId, impactedSpanIds]
   );
+
+  const [nodes, setNodes, onNodesChange] = useNodesState<SpanNodeType>(flowNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(flowEdges);
+
+  useEffect(() => {
+    setNodes(flowNodes);
+    setEdges(flowEdges);
+  }, [flowNodes, flowEdges, setNodes, setEdges]);
 
   const handleNodeClick: NodeMouseHandler = useCallback(
     (_, node) => {
@@ -158,9 +198,11 @@ export function LineageGraph({
   return (
     <div className="w-full h-full relative bg-slate-950 rounded-xl overflow-hidden border border-slate-900">
       <ReactFlow
-        nodes={flowNodes}
-        edges={flowEdges}
+        nodes={nodes}
+        edges={edges}
         nodeTypes={nodeTypes}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
         onNodeClick={handleNodeClick}
         onPaneClick={handlePaneClick}
         fitView
@@ -179,6 +221,7 @@ export function LineageGraph({
             if (st === 'FAILED' || st === 'TIMED_OUT') return '#f43f5e';
             if (st === 'RUNNING') return '#38bdf8';
             if (st === 'AWAITING_APPROVAL') return '#f59e0b';
+            if (st === 'STALLED') return '#a855f7';
             if (st === 'SUCCEEDED') return '#10b981';
             return '#64748b';
           }}

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { formatDistanceToNow } from 'date-fns';
 import {
   Activity,
@@ -14,12 +15,16 @@ import {
   Server,
   Zap,
   ArrowUpRight,
+  Flame,
+  CheckCircle2,
 } from 'lucide-react';
 
-import { fetchAgents, fetchRuns } from '@/lib/api';
+import { fetchAgents, fetchAlerts, fetchRuns } from '@/lib/api';
 import { useWebSocketStream } from '@/hooks/useWebSocketStream';
+import { cn } from '@/lib/cn';
 import {
   AgentResponse,
+  AlertDTO,
   RunListItemResponse,
   SpanStatus,
   WebSocketMessage,
@@ -139,6 +144,7 @@ export default function FleetOverviewPage() {
   const router = useRouter();
   const [agents, setAgents] = useState<AgentResponse[]>([]);
   const [runs, setRuns] = useState<RunListItemResponse[]>([]);
+  const [activeAlerts, setActiveAlerts] = useState<AlertDTO[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -146,12 +152,14 @@ export default function FleetOverviewPage() {
   const refreshData = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [agentsData, runsData] = await Promise.all([
+      const [agentsData, runsData, alertsData] = await Promise.all([
         fetchAgents(),
         fetchRuns({ limit: 50 }),
+        fetchAlerts({ acknowledged: false, limit: 10 }),
       ]);
       setAgents(agentsData);
       setRuns(runsData);
+      setActiveAlerts(alertsData);
       setError(null);
     } catch (err: unknown) {
       console.warn('Failed to load fleet data:', err);
@@ -164,11 +172,16 @@ export default function FleetOverviewPage() {
   // Initial async load: runs in microtask, avoids synchronous setState in effect
   useEffect(() => {
     let isMounted = true;
-    Promise.all([fetchAgents(), fetchRuns({ limit: 50 })])
-      .then(([agentsData, runsData]) => {
+    Promise.all([
+      fetchAgents(),
+      fetchRuns({ limit: 50 }),
+      fetchAlerts({ acknowledged: false, limit: 10 }),
+    ])
+      .then(([agentsData, runsData, alertsData]) => {
         if (isMounted) {
           setAgents(agentsData);
           setRuns(runsData);
+          setActiveAlerts(alertsData);
           setLoading(false);
         }
       })
@@ -184,10 +197,13 @@ export default function FleetOverviewPage() {
     };
   }, []);
 
-  // WebSocket live updates on FLEET_UPDATED
+  // WebSocket live updates on FLEET_UPDATED or ALERT_CREATED
   const handleWebSocketMessage = useCallback(
     (msg: WebSocketMessage) => {
-      if (msg && msg.type === 'FLEET_UPDATED') {
+      if (
+        msg &&
+        (msg.type === 'FLEET_UPDATED' || msg.type === 'ALERT_CREATED')
+      ) {
         refreshData();
       }
     },
@@ -405,6 +421,127 @@ export default function FleetOverviewPage() {
           </div>
         </div>
       </div>
+
+      {/* Active Anomaly Alerts */}
+      <section className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Flame className="w-4 h-4 text-rose-400" />
+            <h3 className="text-lg font-semibold text-slate-100 tracking-tight">
+              Active Anomaly Alerts
+            </h3>
+            {activeAlerts.length > 0 ? (
+              <span className="px-2 py-0.5 rounded-full text-xs font-mono font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse">
+                {activeAlerts.length} unresolved
+              </span>
+            ) : (
+              <span className="px-2 py-0.5 rounded-full text-xs font-mono bg-slate-800 text-slate-400 border border-slate-700">
+                0
+              </span>
+            )}
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="h-20 rounded-xl bg-slate-900/30 border border-slate-800/80 animate-pulse" />
+        ) : activeAlerts.length === 0 ? (
+          <div className="p-4 rounded-xl bg-slate-900/30 border border-slate-800/80 flex items-center gap-3 text-slate-400 text-xs font-mono">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>
+              All agent execution policies within normal operating thresholds. Zero active tool loops, budget overruns, or cascading failures detected.
+            </span>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+            {activeAlerts.map((alert) => {
+              const isCrit = alert.severity === 'CRITICAL';
+              const isHigh = alert.severity === 'HIGH';
+              const isMed = alert.severity === 'MEDIUM';
+
+              const badgeStyle = isCrit
+                ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                : isHigh
+                ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                : isMed
+                ? 'bg-yellow-500/20 text-yellow-300 border-yellow-500/40'
+                : 'bg-sky-500/20 text-sky-300 border-sky-500/40';
+
+              const cardBorder = isCrit
+                ? 'border-rose-500/30 hover:border-rose-500/50'
+                : isHigh
+                ? 'border-amber-500/30 hover:border-amber-500/50'
+                : 'border-slate-800 hover:border-slate-700';
+
+              return (
+                <div
+                  key={alert.alert_id}
+                  className={cn(
+                    'p-4 rounded-xl bg-slate-900/60 border backdrop-blur-sm transition-all flex flex-col justify-between gap-3 shadow-sm',
+                    cardBorder
+                  )}
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span
+                          className={cn(
+                            'px-2 py-0.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider border',
+                            badgeStyle
+                          )}
+                        >
+                          {alert.severity}
+                        </span>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-slate-800 text-slate-300 border border-slate-700">
+                          {alert.rule_id}
+                        </span>
+                      </div>
+                      <span className="text-[11px] font-mono text-slate-400">
+                        {formatRelativeTime(alert.created_at)}
+                      </span>
+                    </div>
+
+                    <h4 className="text-sm font-semibold text-slate-100 line-clamp-2">
+                      {alert.title}
+                    </h4>
+
+                    {/* Evidence summary */}
+                    {alert.evidence && Object.keys(alert.evidence).length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        {Object.entries(alert.evidence).map(([k, v]) => (
+                          <span
+                            key={k}
+                            className="px-2 py-0.5 rounded text-[11px] font-mono bg-slate-800/80 text-slate-300 border border-slate-700/60 max-w-full truncate"
+                          >
+                            <span className="text-slate-400">{k}:</span>{' '}
+                            {typeof v === 'object' ? JSON.stringify(v) : String(v)}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Footer link to run */}
+                  <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-xs font-mono">
+                    <Link
+                      href={`/runs/${encodeURIComponent(alert.run_id)}`}
+                      className="inline-flex items-center gap-1 font-semibold text-cyan-400 hover:text-cyan-300 transition-colors group"
+                    >
+                      <span className="truncate max-w-[150px]">Run: {alert.run_id}</span>
+                      <ArrowUpRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                    </Link>
+
+                    {alert.impacted_span_ids && alert.impacted_span_ids.length > 0 && (
+                      <span className="text-[11px] text-rose-400/90 font-medium">
+                        {alert.impacted_span_ids.length} span{alert.impacted_span_ids.length > 1 ? 's' : ''} impacted
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       {/* Registered Agents Grid */}
       <section className="space-y-4">

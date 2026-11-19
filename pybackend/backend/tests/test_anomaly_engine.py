@@ -695,12 +695,28 @@ async def test_check_stalled_runs_transitions_running_run():
     select_runs_mock = MagicMock()
     select_runs_mock.scalars().all.return_value = [stalled_run]
 
+    stalled_span = Span(
+        span_id="span_open_1",
+        trace_id=stalled_run.trace_id,
+        run_id=stalled_run.run_id,
+        agent_id="coordinator-agent",
+        operation_name="run_coordinator_agent",
+        span_type="AGENT",
+        status="RUNNING",
+        started_at=stalled_run.started_at,
+    )
+    select_spans_mock = MagicMock()
+    select_spans_mock.scalars().all.return_value = [stalled_span]
+
     alert_mock_result = MagicMock()
     alert_mock_result.scalar_one_or_none.return_value = None
 
     def execute_side_effect(stmt):
-        if "from runs" in str(stmt).lower():
+        s = str(stmt).lower()
+        if "from runs" in s:
             return select_runs_mock
+        if "from spans" in s:
+            return select_spans_mock
         return alert_mock_result
 
     mock_db.execute.side_effect = execute_side_effect
@@ -715,18 +731,26 @@ async def test_check_stalled_runs_transitions_running_run():
         assert alerts[0].rule_id == "RUN_STALLED"
         assert alerts[0].severity == "MEDIUM"
         assert alerts[0].run_id == "run_stalled_1"
+        assert alerts[0].origin_span_id == "span_open_1"
+        assert alerts[0].impacted_span_ids == ["span_open_1"]
 
         # Verify run state mutated to STALLED
         assert stalled_run.status == "STALLED"
         assert stalled_run.ended_at is not None
 
+        # Verify open span mutated to STALLED
+        assert stalled_span.status == "STALLED"
+        assert stalled_span.ended_at is not None
+        assert stalled_span.error_class == "StallTimeoutError"
+
         mock_db.commit.assert_awaited()
 
-        # Check published events: ALERT_CREATED, RUN_UPDATED, FLEET_UPDATED
+        # Check published events: ALERT_CREATED, SPAN_UPSERT, RUN_UPDATED, FLEET_UPDATED
         published_event_types = [
             call.args[1] for call in mock_publish.await_args_list
         ]
         assert "ALERT_CREATED" in published_event_types
+        assert "SPAN_UPSERT" in published_event_types
         assert "RUN_UPDATED" in published_event_types
         assert "FLEET_UPDATED" in published_event_types
 

@@ -2,7 +2,7 @@
 
 import { memo } from 'react';
 import { Handle, Position, type NodeProps, type Node } from '@xyflow/react';
-import { Bot, Cpu, Wrench, ShieldAlert, Coins } from 'lucide-react';
+import { Bot, Cpu, Wrench, ShieldAlert, Coins, Flame } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { LineageNodeDTO } from '@/types/telemetry';
 
@@ -36,13 +36,16 @@ export const SpanNode = memo(function SpanNode({
   // Status highlights and styles
   const isRunning = status === 'RUNNING';
   const isAwaiting = status === 'AWAITING_APPROVAL';
+  const isStalled = status === 'STALLED';
   const isSucceeded = status === 'SUCCEEDED';
   const isFailed = status === 'FAILED' || status === 'TIMED_OUT';
 
   const borderClass = isRunning
     ? 'border-sky-500 shadow-sky-500/20 ring-1 ring-sky-500/30 animate-pulse'
     : isAwaiting
-    ? 'border-amber-500 shadow-amber-500/20 ring-1 ring-amber-500/30'
+    ? 'border-amber-500 shadow-amber-500/20 ring-1 ring-amber-500/30 animate-pulse'
+    : isStalled
+    ? 'border-purple-500 shadow-purple-500/30 ring-1 ring-purple-500/40'
     : isFailed
     ? 'border-rose-500 shadow-rose-500/30 ring-1 ring-rose-500/30'
     : isSucceeded
@@ -53,6 +56,8 @@ export const SpanNode = memo(function SpanNode({
     ? 'bg-sky-500/20 text-sky-300 border-sky-500/40'
     : isAwaiting
     ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+    : isStalled
+    ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
     : isFailed
     ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
     : isSucceeded
@@ -76,12 +81,20 @@ export const SpanNode = memo(function SpanNode({
   return (
     <div
       className={cn(
-        'w-64 rounded-lg border bg-slate-900/95 p-3 shadow-lg transition-all cursor-pointer backdrop-blur-sm',
+        'w-64 rounded-lg border bg-slate-900/95 p-3 shadow-lg transition-all cursor-pointer backdrop-blur-sm relative',
         borderClass,
         selected && 'ring-2 ring-cyan-400 ring-offset-2 ring-offset-slate-950',
-        is_root_cause && 'ring-2 ring-rose-500 ring-offset-1 ring-offset-slate-950'
+        is_root_cause && 'ring-2 ring-rose-500 shadow-rose-950/60 ring-offset-1 ring-offset-slate-950'
       )}
     >
+      {/* Prominent Top-Right Root Cause Badge */}
+      {is_root_cause && (
+        <div className="absolute -top-3 -right-2.5 flex items-center gap-1 bg-rose-600 text-white font-bold tracking-wider text-[10px] px-2 py-0.5 rounded-full shadow-lg shadow-rose-950/80 border border-rose-400 z-10">
+          <Flame className="w-3 h-3 fill-white text-white" />
+          <span>ROOT CAUSE</span>
+        </div>
+      )}
+
       <Handle
         type="target"
         position={Position.Top}

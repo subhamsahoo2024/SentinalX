@@ -360,9 +360,12 @@ def run_coordinator_agent(
         # Initial RUNNING span has already been emitted upon entering @trace_agent.
         # Synchronously flush to backend so Run is RUNNING in database.
         sentinel_sdk.flush()
+        import sys
+        sys.stdout.flush()
         if stall_duration_sec > 0:
             time.sleep(stall_duration_sec)
         if exit_on_stall:
+            sys.stdout.flush()
             os._exit(0)
         return {"status": "STALLED"}
 

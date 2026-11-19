@@ -380,7 +380,10 @@ async def evaluate_run_anomalies(
 
 
 async def check_stalled_runs(db: AsyncSession) -> list[AlertDTO]:
-    """Inspect running runs and transition stalled ones to STALLED status."""
+    """Inspect running runs and transition stalled ones to STALLED status,
+
+    marking all open spans as STALLED and publishing live updates.
+    """
     now_utc = datetime.now(UTC)
     cutoff = now_utc - timedelta(seconds=settings.RUN_STALL_TIMEOUT_SEC)
 
@@ -397,12 +400,40 @@ async def check_stalled_runs(db: AsyncSession) -> list[AlertDTO]:
         run.status = "STALLED"
         run.ended_at = now_utc
 
+        # Find all open / in-flight spans for this run and transition them to STALLED
+        spans_stmt = (
+            select(Span)
+            .where(
+                Span.run_id == run.run_id,
+                Span.status.in_(["RUNNING", "QUEUED"]),
+            )
+            .order_by(Span.started_at.asc(), Span.span_id.asc())
+        )
+        spans_res = await db.execute(spans_stmt)
+        open_spans = list(spans_res.scalars().all())
+
+        for s in open_spans:
+            s.status = "STALLED"
+            if not s.ended_at:
+                s.ended_at = now_utc
+            if not s.error_class:
+                s.error_class = "StallTimeoutError"
+            if not s.error_message:
+                s.error_message = (
+                    f"Execution stalled: no telemetry received for "
+                    f">{settings.RUN_STALL_TIMEOUT_SEC}s"
+                )
+
+        open_span_ids = [s.span_id for s in open_spans]
+        origin_span_id = open_spans[-1].span_id if open_spans else None
+
         evidence = {
             "last_event_at": run.last_event_at.isoformat()
             if run.last_event_at
             else None,
             "stall_timeout_sec": settings.RUN_STALL_TIMEOUT_SEC,
             "stalled_at": now_utc.isoformat(),
+            "stalled_spans_count": len(open_spans),
         }
         title = (
             f"Run '{run.run_id}' stalled: no telemetry received for "
@@ -412,13 +443,34 @@ async def check_stalled_runs(db: AsyncSession) -> list[AlertDTO]:
             db=db,
             run_id=run.run_id,
             rule_id="RUN_STALLED",
-            origin_span_id=None,
+            origin_span_id=origin_span_id,
             severity="MEDIUM",
             title=title,
             evidence=evidence,
-            impacted_span_ids=[],
+            impacted_span_ids=open_span_ids,
         )
         alerts.append(alert)
+
+        # Publish SPAN_UPSERT for each stalled span so lineage graph updates live
+        for s in open_spans:
+            span_payload = {
+                "span_id": s.span_id,
+                "run_id": s.run_id,
+                "trace_id": s.trace_id,
+                "parent_span_id": s.parent_span_id,
+                "agent_id": s.agent_id,
+                "operation_name": s.operation_name,
+                "span_type": str(s.span_type),
+                "status": "STALLED",
+                "started_at": s.started_at.isoformat()
+                if s.started_at
+                else None,
+                "ended_at": s.ended_at.isoformat() if s.ended_at else None,
+                "attributes": s.attributes,
+            }
+            await publish_event(
+                f"run:{run.run_id}:stream", "SPAN_UPSERT", span_payload
+            )
 
         # Publish RUN_UPDATED and FLEET_UPDATED
         run_payload = {

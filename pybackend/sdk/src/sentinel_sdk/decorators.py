@@ -1,7 +1,6 @@
 import asyncio
 import functools
 import inspect
-import os
 import time
 import traceback
 import uuid
@@ -481,18 +480,10 @@ def trace_tool(
 
 def _resolve_sentinel_config() -> tuple[str, str]:
     exporter = get_exporter()
-    base_url = (
-        getattr(exporter, "base_url", None)
-        or os.getenv("SENTINEL_URL", "http://127.0.0.1:8000")
-    )
-    if "localhost" in base_url:
-        base_url = base_url.replace("localhost", "127.0.0.1")
-    base_url = base_url.rstrip("/")
-    api_key = (
-        getattr(exporter, "api_key", None)
-        or os.getenv("SENTINEL_API_KEY", "dev-secret-key")
-    )
-    return base_url, api_key
+    if exporter and getattr(exporter, "base_url", None) and getattr(exporter, "api_key", None):
+        return exporter.base_url, exporter.api_key
+    from sentinel_sdk.config import load_sdk_env
+    return load_sdk_env()
 
 
 async def _execute_async_gate(

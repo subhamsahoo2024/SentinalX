@@ -1,12 +1,12 @@
 import atexit
 import logging
-import os
 import queue
 import threading
 import time
 
 import httpx
 
+from sentinel_sdk.config import load_sdk_env
 from sentinel_sdk.schema import CanonicalEventV1, TelemetryBatchRequest
 
 logger = logging.getLogger(__name__)
@@ -22,13 +22,17 @@ class SentinelExporter:
         batch_size: int = 25,
         flush_interval: float = 0.25,
     ) -> None:
-        raw_url = base_url or os.getenv("SENTINEL_URL", "http://127.0.0.1:8000")
-        if "localhost" in raw_url:
-            raw_url = raw_url.replace("localhost", "127.0.0.1")
-        self.base_url = raw_url.rstrip("/")
-        self.api_key = api_key or os.getenv(
-            "SENTINEL_API_KEY", "dev-secret-key"
-        )
+        if base_url is None or api_key is None:
+            env_url, env_key = load_sdk_env()
+            if base_url is None:
+                base_url = env_url
+            if api_key is None:
+                api_key = env_key
+
+        if "localhost" in base_url:
+            base_url = base_url.replace("localhost", "127.0.0.1")
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
         self.batch_size = batch_size
         self.flush_interval = flush_interval
 

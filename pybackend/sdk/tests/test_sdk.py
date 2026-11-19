@@ -373,3 +373,28 @@ def test_langchain_callback_error_handling():
     assert emitted[1].status == SpanStatus.FAILED
     assert emitted[1].error.error_class == "ValueError"
     assert emitted[1].error.message == "Tool failed"
+
+
+def test_load_sdk_env_from_dotenv():
+    from sentinel_sdk.config import find_env_file, load_sdk_env
+
+    env_path = find_env_file()
+    assert env_path is not None
+    assert env_path.name == ".env"
+
+    url, api_key = load_sdk_env()
+    assert url.startswith("http")
+    assert len(api_key) > 0
+
+
+def test_load_sdk_env_missing_raises_error(monkeypatch):
+    from sentinel_sdk.config import load_sdk_env
+
+    monkeypatch.delenv("SENTINEL_URL", raising=False)
+    with pytest.raises(ValueError, match="Missing SENTINEL_URL"):
+        load_sdk_env()
+
+    monkeypatch.setenv("SENTINEL_URL", "http://127.0.0.1:8000")
+    monkeypatch.delenv("SENTINEL_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="Missing SENTINEL_API_KEY"):
+        load_sdk_env()

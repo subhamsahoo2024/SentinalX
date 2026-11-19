@@ -1,8 +1,10 @@
 import asyncio
+from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 import json
 import logging
-from datetime import datetime, timezone
-from typing import Any, AsyncGenerator
+from typing import Any
+
 import redis.asyncio as aioredis
 
 from sentinel_backend.config import settings
@@ -27,7 +29,7 @@ def get_redis_pool() -> aioredis.ConnectionPool:
         _redis_pool = aioredis.ConnectionPool.from_url(
             settings.REDIS_URL,
             decode_responses=True,
-            max_connections=20,
+            max_connections=50,
         )
     return _redis_pool
 
@@ -48,9 +50,9 @@ async def close_redis() -> None:
 async def publish_event(
     channel: str, event_type: str, payload: dict[str, Any]
 ) -> int:
-    """Serializes event to JSON and publishes to a Redis channel."""
+    """Serializes event to JSON and publishes to a Redis channel with timeout."""
     client = get_redis_client()
-    now_utc_iso = datetime.now(timezone.utc).isoformat()
+    now_utc_iso = datetime.now(UTC).isoformat()
     message = {
         "type": event_type,
         "timestamp": now_utc_iso,
@@ -58,8 +60,8 @@ async def publish_event(
     }
     raw = json.dumps(message, default=str)
     try:
-        return await client.publish(channel, raw)
-    except Exception as e:
+        return await asyncio.wait_for(client.publish(channel, raw), timeout=3.0)
+    except Exception as e:  # noqa: BLE001
         logger.warning(
             "Failed to publish event to Redis channel %s: %s", channel, e
         )
@@ -69,11 +71,14 @@ async def publish_event(
 async def subscribe_channel(
     channel: str,
 ) -> AsyncGenerator[dict[str, Any], None]:
-    """Async generator yielding decoded JSON messages from a Redis channel,
+    """Async generator yielding decoded JSON messages from a dedicated Redis connection,
 
-    cleaning up pubsub subscriptions upon exit/cancellation.
+    cleaning up pubsub subscriptions upon exit/cancellation without exhausting command pool.
     """
-    client = get_redis_client()
+    client = aioredis.Redis.from_url(
+        settings.REDIS_URL,
+        decode_responses=True,
+    )
     pubsub = client.pubsub()
     try:
         await pubsub.subscribe(channel)
@@ -92,26 +97,30 @@ async def subscribe_channel(
                     elif isinstance(data, dict):
                         yield data
                 else:
-                    await asyncio.sleep(0.02)
+                    await asyncio.sleep(0.05)
             except asyncio.CancelledError:
                 break
     finally:
         try:
             await pubsub.unsubscribe(channel)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.debug(
                 "Error unsubscribing from channel %s: %s", channel, e
             )
         try:
-            await pubsub.close()
-        except Exception as e:
+            await pubsub.aclose()
+        except Exception as e:  # noqa: BLE001
             logger.debug("Error closing pubsub for channel %s: %s", channel, e)
+        try:
+            await client.aclose()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Error closing Redis client: %s", e)
 
 
 __all__ = [
-    "get_redis_pool",
-    "get_redis_client",
     "close_redis",
+    "get_redis_client",
+    "get_redis_pool",
     "publish_event",
     "subscribe_channel",
 ]

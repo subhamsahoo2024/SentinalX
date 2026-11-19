@@ -1,5 +1,6 @@
 import {
   AgentResponse,
+  AlertDTO,
   ApprovalDTO,
   AuditEventDTO,
   FetchRunsParams,
@@ -10,7 +11,7 @@ import {
 } from '@/types/telemetry';
 
 const API_BASE_URL = (
-  process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+  process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'
 ).replace(/\/+$/, '');
 
 /**
@@ -167,6 +168,63 @@ export async function fetchAuditEvents(): Promise<AuditEventDTO[]> {
   });
   if (!res.ok) {
     throw new Error(`Failed to fetch audit events: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
+/**
+ * Fetch anomaly alerts, optionally filtered by run_id and acknowledgement status.
+ */
+export async function fetchAlerts(params?: {
+  run_id?: string;
+  acknowledged?: boolean;
+  limit?: number;
+}): Promise<AlertDTO[]> {
+  const url = new URL(`${API_BASE_URL}/api/alerts`);
+  if (params) {
+    if (params.run_id) {
+      url.searchParams.set('run_id', params.run_id);
+    }
+    if (params.acknowledged !== undefined) {
+      url.searchParams.set('acknowledged', String(params.acknowledged));
+    }
+    if (params.limit !== undefined) {
+      url.searchParams.set('limit', String(params.limit));
+    }
+  }
+  const res = await fetch(url.toString(), {
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch alerts: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
+/**
+ * Mark an anomaly alert as acknowledged.
+ */
+export async function acknowledgeAlert(alertId: string): Promise<AlertDTO> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/alerts/${encodeURIComponent(alertId)}/ack`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    }
+  );
+  if (!res.ok) {
+    let errorDetail = `${res.status} ${res.statusText}`;
+    try {
+      const errJson = await res.json();
+      if (errJson && errJson.detail) {
+        errorDetail = errJson.detail;
+      }
+    } catch {
+      // fallback
+    }
+    throw new Error(errorDetail);
   }
   return res.json();
 }

@@ -12,7 +12,7 @@ export interface UseWebSocketStreamResult<T> {
 }
 
 const WS_BASE_URL = (
-  process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000'
+  process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:8000'
 ).replace(/\/+$/, '');
 
 export function useWebSocketStream<T = unknown>(

@@ -222,6 +222,19 @@ export interface ApprovalDTO {
   created_at: string;
 }
 
+export interface AlertDTO {
+  alert_id: string;
+  run_id: string;
+  origin_span_id?: string | null;
+  rule_id: string;
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | string;
+  title: string;
+  evidence: Record<string, unknown>;
+  impacted_span_ids: string[];
+  acknowledged: boolean;
+  created_at: string;
+}
+
 export interface AuditEventDTO {
   audit_id: string;
   actor_id: string;

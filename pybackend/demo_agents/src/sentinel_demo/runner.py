@@ -1,5 +1,8 @@
 import argparse
+import os
 import sys
+
+from dotenv import load_dotenv
 
 import sentinel_sdk
 from sentinel_sdk import (
@@ -7,8 +10,13 @@ from sentinel_sdk import (
     GovernanceTimeoutError,
     start_run,
 )
-
+from sentinel_sdk.config import find_env_file
 from sentinel_demo.agents import run_coordinator_agent
+
+# Ensure .env configuration is loaded
+_env_path = find_env_file()
+if _env_path:
+    load_dotenv(_env_path)
 
 
 def main() -> None:
@@ -47,7 +55,7 @@ def main() -> None:
     parser.add_argument(
         "--dashboard-host",
         type=str,
-        default="http://localhost:3000",
+        default=os.getenv("DASHBOARD_URL") or "http://localhost:3000",
         help="Frontend dashboard host URL (default: http://localhost:3000)",
     )
 
@@ -70,6 +78,7 @@ def main() -> None:
 
             print(f"\n[1/3] Initializing Run: {run_id}")
             print(f"      Trace ID:        {trace_id}")
+            sys.stdout.flush()
             print("\n[2/3] Orchestrating Multi-Agent Workflow...")
             if args.scenario == "hitl":
                 print("      • Coordinator Agent          -> Triage assessment & delegation")
@@ -87,7 +96,8 @@ def main() -> None:
                 print("      • Remediation Agent        -> Downstream execution crash [CASCADE FAILURE]\n")
             elif args.scenario == "stall":
                 print("      • Coordinator Agent        -> Initial RUNNING span emitted and flushed")
-                print("      • Watchdog Monitor         -> 30s silence window [RUN STALLED WATCHDOG]\n")
+                print("      • Watchdog Monitor         -> 30s silence window [RUN STALLED WATCHDOG]")
+                print(f"      • Live Dashboard URL       -> {args.dashboard_host.rstrip('/')}/runs/{run_id}\n")
             else:
                 print("      • Coordinator Agent -> Triage assessment & delegation")
                 print("      • Diagnostic Agent  -> Log analysis & DB health inspection")

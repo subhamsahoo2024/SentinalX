@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, use, useCallback, useEffect, useState } from 'react';
+import { Suspense, use, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowLeft,
@@ -12,13 +12,15 @@ import {
   RefreshCw,
   Bot,
 } from 'lucide-react';
-import { fetchRunById, fetchRunLineage } from '@/lib/api';
+import { fetchAlerts, fetchRunById, fetchRunLineage, acknowledgeAlert } from '@/lib/api';
 import { useWebSocketStream } from '@/hooks/useWebSocketStream';
 import { LineageGraph } from '@/components/lineage/LineageGraph';
 import { SpanInspector } from '@/components/lineage/SpanInspector';
+import { RunAlertsBanner } from '@/components/lineage/RunAlertsBanner';
 import { LiveConnectionBadge } from '@/components/LiveConnectionBadge';
 import { cn } from '@/lib/cn';
 import {
+  AlertDTO,
   LineageGraphDTO,
   LineageNodeDTO,
   RunSummaryDTO,
@@ -34,6 +36,7 @@ function RunDetailContent({
 
   const [run, setRun] = useState<RunSummaryDTO | null>(null);
   const [graph, setGraph] = useState<LineageGraphDTO | null>(null);
+  const [alerts, setAlerts] = useState<AlertDTO[]>([]);
   const [selectedSpan, setSelectedSpan] = useState<LineageNodeDTO | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -42,12 +45,14 @@ function RunDetailContent({
   const refreshRunData = useCallback(async () => {
     if (!runId) return;
     try {
-      const [runData, graphData] = await Promise.all([
+      const [runData, graphData, alertsData] = await Promise.all([
         fetchRunById(runId),
         fetchRunLineage(runId),
+        fetchAlerts({ run_id: runId }),
       ]);
       setRun(runData);
       setGraph(graphData);
+      setAlerts(alertsData);
       setError(null);
 
       // Keep selected span fresh if already inspecting
@@ -68,11 +73,16 @@ function RunDetailContent({
     let isMounted = true;
     if (!runId) return;
 
-    Promise.all([fetchRunById(runId), fetchRunLineage(runId)])
-      .then(([runData, graphData]) => {
+    Promise.all([
+      fetchRunById(runId),
+      fetchRunLineage(runId),
+      fetchAlerts({ run_id: runId }),
+    ])
+      .then(([runData, graphData, alertsData]) => {
         if (!isMounted) return;
         setRun(runData);
         setGraph(graphData);
+        setAlerts(alertsData);
         setError(null);
         setLoading(false);
       })
@@ -93,7 +103,11 @@ function RunDetailContent({
   // Subscribe to live run WebSocket events
   const handleWsMessage = useCallback(
     (msg: { type?: string }) => {
-      if (msg?.type === 'SPAN_UPSERT' || msg?.type === 'RUN_UPDATED') {
+      if (
+        msg?.type === 'SPAN_UPSERT' ||
+        msg?.type === 'RUN_UPDATED' ||
+        msg?.type === 'ALERT_CREATED'
+      ) {
         refreshRunData();
       }
     },
@@ -111,16 +125,57 @@ function RunDetailContent({
     setTimeout(() => setCopiedRunId(false), 2000);
   };
 
+  const impactedSpanIds = useMemo(() => {
+    const ids = new Set<string>();
+    alerts.forEach((alert) => {
+      alert.impacted_span_ids?.forEach((id) => ids.add(id));
+    });
+    return Array.from(ids);
+  }, [alerts]);
+
+  const handleFocusSpan = useCallback(
+    (spanId: string) => {
+      const node = graph?.nodes.find((n) => n.id === spanId);
+      if (node) {
+        setSelectedSpan(node);
+      }
+    },
+    [graph]
+  );
+
+  const handleAcknowledgeAlert = useCallback(async (alertId: string) => {
+    try {
+      const updated = await acknowledgeAlert(alertId);
+      setAlerts((prev) =>
+        prev.map((a) => (a.alert_id === alertId ? updated : a))
+      );
+    } catch (err) {
+      console.warn('Failed to acknowledge alert:', err);
+    }
+  }, []);
+
   const status = run?.status || graph?.status;
   const isRunning = status === 'RUNNING';
   const isSucceeded = status === 'SUCCEEDED';
   const isFailed = status === 'FAILED' || status === 'TIMED_OUT';
   const isAwaiting = status === 'AWAITING_APPROVAL';
+  const isStalled = status === 'STALLED';
+
+  // Fallback refresh while in-flight to guarantee transition detection
+  useEffect(() => {
+    if (!isRunning || !runId) return;
+    const interval = setInterval(() => {
+      refreshRunData();
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [isRunning, runId, refreshRunData]);
 
   const statusBadgeClass = isRunning
     ? 'bg-sky-500/20 text-sky-300 border-sky-500/40 animate-pulse'
     : isAwaiting
     ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse'
+    : isStalled
+    ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
     : isFailed
     ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
     : isSucceeded
@@ -128,7 +183,7 @@ function RunDetailContent({
     : 'bg-slate-800 text-slate-300 border-slate-700';
 
   return (
-    <div className="flex flex-col h-[calc(100vh-3.5rem)] w-full overflow-hidden bg-slate-950">
+    <div className="flex flex-col h-full w-full overflow-hidden bg-slate-950">
       {/* Compact Top Navigation Bar */}
       <header className="h-14 px-4 sm:px-6 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md flex items-center justify-between gap-4 shrink-0 z-20">
         {/* Left: Back Link & Identity */}
@@ -237,40 +292,49 @@ function RunDetailContent({
         </div>
       </header>
 
-      {/* Main Graph Viewport */}
-      <main className="flex-1 w-full h-full relative overflow-hidden p-2 sm:p-3">
-        {loading && !graph ? (
-          <div className="flex flex-col items-center justify-center h-full w-full bg-slate-950/80 text-slate-400 font-mono text-sm">
-            <RefreshCw className="w-8 h-8 mb-3 text-cyan-400 animate-spin" />
-            <span>Loading agent lineage DAG...</span>
-          </div>
-        ) : error ? (
-          <div className="flex flex-col items-center justify-center h-full w-full p-6 text-center">
-            <div className="max-w-md p-6 rounded-xl bg-rose-950/40 border border-rose-500/40 text-rose-300 text-sm">
-              <h4 className="font-bold text-rose-200 mb-1">Failed to load run</h4>
-              <p className="font-mono text-xs">{error}</p>
-              <button
-                onClick={refreshRunData}
-                className="mt-4 px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-medium text-xs transition-colors"
-              >
-                Retry
-              </button>
-            </div>
-          </div>
-        ) : graph ? (
-          <LineageGraph
-            graph={graph}
-            selectedSpanId={selectedSpan?.id}
-            onSelectSpan={setSelectedSpan}
-          />
-        ) : null}
-
-        {/* Slide-over Span Inspector Drawer */}
-        <SpanInspector
-          span={selectedSpan}
-          traceId={run?.trace_id || graph?.trace_id}
-          onClose={() => setSelectedSpan(null)}
+      {/* Main Graph Viewport & Alerts Banner */}
+      <main className="flex-1 w-full relative overflow-hidden p-2 sm:p-3 flex flex-col gap-2 min-h-0">
+        <RunAlertsBanner
+          alerts={alerts}
+          onFocusSpan={handleFocusSpan}
+          onAcknowledgeAlert={handleAcknowledgeAlert}
         />
+
+        <div className="flex-1 w-full relative min-h-0 overflow-hidden">
+          {loading && !graph ? (
+            <div className="flex flex-col items-center justify-center h-full w-full bg-slate-950/80 text-slate-400 font-mono text-sm">
+              <RefreshCw className="w-8 h-8 mb-3 text-cyan-400 animate-spin" />
+              <span>Loading agent lineage DAG...</span>
+            </div>
+          ) : error ? (
+            <div className="flex flex-col items-center justify-center h-full w-full p-6 text-center">
+              <div className="max-w-md p-6 rounded-xl bg-rose-950/40 border border-rose-500/40 text-rose-300 text-sm">
+                <h4 className="font-bold text-rose-200 mb-1">Failed to load run</h4>
+                <p className="font-mono text-xs">{error}</p>
+                <button
+                  onClick={refreshRunData}
+                  className="mt-4 px-4 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-medium text-xs transition-colors"
+                >
+                  Retry
+                </button>
+              </div>
+            </div>
+          ) : graph ? (
+            <LineageGraph
+              graph={graph}
+              selectedSpanId={selectedSpan?.id}
+              onSelectSpan={setSelectedSpan}
+              impactedSpanIds={impactedSpanIds}
+            />
+          ) : null}
+
+          {/* Slide-over Span Inspector Drawer */}
+          <SpanInspector
+            span={selectedSpan}
+            traceId={run?.trace_id || graph?.trace_id}
+            onClose={() => setSelectedSpan(null)}
+          />
+        </div>
       </main>
     </div>
   );
