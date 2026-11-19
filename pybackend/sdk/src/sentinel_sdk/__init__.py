@@ -5,9 +5,15 @@ from sentinel_sdk.context import (
     start_run,
 )
 from sentinel_sdk.decorators import (
+    gate_tool,
     trace_agent,
     trace_llm,
     trace_tool,
+)
+from sentinel_sdk.exceptions import (
+    GovernanceRejectedError,
+    GovernanceTimeoutError,
+    SentinelGovernanceError,
 )
 from sentinel_sdk.exporter import (
     SentinelExporter,
@@ -33,10 +39,13 @@ __all__ = [
     "CostBasis",
     "CostInfo",
     "ErrorInfo",
+    "GovernanceRejectedError",
+    "GovernanceTimeoutError",
     "ModelInfo",
     "RunContext",
     "RunContextManager",
     "SentinelExporter",
+    "SentinelGovernanceError",
     "SentinelLangChainCallback",
     "SpanStatus",
     "SpanType",
@@ -44,6 +53,7 @@ __all__ = [
     "TokenUsage",
     "configure_sentinel",
     "flush",
+    "gate_tool",
     "get_exporter",
     "redact_payload",
     "start_run",

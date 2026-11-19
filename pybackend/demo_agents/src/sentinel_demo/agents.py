@@ -1,7 +1,7 @@
 import time
 from typing import Any
 
-from sentinel_sdk import trace_agent, trace_tool
+from sentinel_sdk import gate_tool, trace_agent, trace_tool
 
 from sentinel_demo.mock_llm import mock_llm_completion
 
@@ -80,6 +80,30 @@ def restart_worker_node(node_id: str) -> dict[str, Any]:
         "drain_duration_s": 1.8,
         "restart_status": "RESTARTED",
         "health_check": "PASSED",
+    }
+
+
+@gate_tool(
+    risk_level="CRITICAL",
+    policy_reason="Restarting production database cluster impacts live customer traffic",
+)
+def restart_production_cluster(
+    cluster_name: str,
+    force_failover: bool = True,
+    auth_token: str = "prod-root-secret-777",
+) -> dict[str, Any]:
+    """Restart production database cluster with failover (HIGH-RISK HITL ACTION).
+
+    Accepts auth_token deliberately to verify sensitive credential redaction.
+    """
+    time.sleep(0.3)
+    return {
+        "cluster_name": cluster_name,
+        "force_failover": force_failover,
+        "auth_authenticated": bool(auth_token),
+        "status": "RESTARTED",
+        "failover_duration_s": 2.4,
+        "new_primary": f"{cluster_name}-replica-01",
     }
 
 
@@ -175,16 +199,61 @@ def run_remediation_agent(diagnosis: dict[str, Any]) -> dict[str, Any]:
 
 
 @trace_agent(
+    agent_id="critical-remediation-agent",
+    name="Critical Remediation Agent",
+    team="it-ops",
+    framework="custom",
+)
+def run_critical_remediation_agent(diagnosis: dict[str, Any]) -> dict[str, Any]:
+    """Execute high-risk critical remediation requiring human approval gate."""
+    cluster_name = diagnosis.get("cluster", "primary-postgres-cluster")
+
+    # Step 1: LLM Reasoning on Critical Remediation
+    llm_plan = mock_llm_completion(
+        prompt=(
+            f"Evaluate critical failover and cluster restart for {cluster_name}. "
+            f"Root cause: {diagnosis.get('root_cause', '')}"
+        ),
+        latency_ms=200,
+    )
+
+    # Step 2: Invoke gated high-risk tool
+    restart_res = restart_production_cluster(
+        cluster_name=cluster_name,
+        force_failover=True,
+        auth_token="prod-root-secret-777",
+    )
+
+    return {
+        "status": "RESOLVED",
+        "cluster": cluster_name,
+        "actions_taken": [
+            (
+                f"Executed production restart on {cluster_name} "
+                f"(failover: {restart_res.get('force_failover')})"
+            ),
+            f"Promoted {restart_res.get('new_primary')} to new primary cluster node",
+        ],
+        "details": restart_res,
+        "plan_summary": llm_plan["content"],
+    }
+
+
+@trace_agent(
     agent_id="coordinator-agent",
     name="IT Triage Coordinator",
     team="it-ops",
     framework="custom",
 )
-def run_coordinator_agent(ticket_id: str, description: str) -> dict[str, Any]:
+def run_coordinator_agent(
+    ticket_id: str,
+    description: str,
+    scenario: str = "normal",
+) -> dict[str, Any]:
     """Triage incoming IT support ticket and orchestrate diagnostic and remediation agents."""
     # Step 1: Initial Triage Reasoning
     triage_llm = mock_llm_completion(
-        prompt=f"Triage IT support ticket {ticket_id}: {description}",
+        prompt=f"Triage IT support ticket {ticket_id}: {description} (scenario={scenario})",
         latency_ms=200,
     )
 
@@ -199,12 +268,16 @@ def run_coordinator_agent(ticket_id: str, description: str) -> dict[str, Any]:
     # Step 2: Delegate to Diagnostic Agent
     diagnosis = run_diagnostic_agent(incident=incident)
 
-    # Step 3: Delegate to Remediation Agent
-    remediation = run_remediation_agent(diagnosis=diagnosis)
+    # Step 3: Delegate to Remediation Agent based on scenario
+    if scenario == "hitl":
+        remediation = run_critical_remediation_agent(diagnosis=diagnosis)
+    else:
+        remediation = run_remediation_agent(diagnosis=diagnosis)
 
     return {
         "ticket_id": ticket_id,
         "description": description,
+        "scenario": scenario,
         "status": "RESOLVED",
         "triage_assessment": triage_llm["content"],
         "diagnosis": diagnosis,
@@ -217,9 +290,10 @@ __all__ = [
     "check_db_metrics",
     "clear_stale_cache",
     "fetch_service_logs",
+    "restart_production_cluster",
     "restart_worker_node",
     "run_coordinator_agent",
+    "run_critical_remediation_agent",
     "run_diagnostic_agent",
     "run_remediation_agent",
 ]
-

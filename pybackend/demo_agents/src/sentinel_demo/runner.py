@@ -2,7 +2,11 @@ import argparse
 import sys
 
 import sentinel_sdk
-from sentinel_sdk import start_run
+from sentinel_sdk import (
+    GovernanceRejectedError,
+    GovernanceTimeoutError,
+    start_run,
+)
 
 from sentinel_demo.agents import run_coordinator_agent
 
@@ -16,8 +20,8 @@ def main() -> None:
         "--scenario",
         type=str,
         default="normal",
-        choices=["normal"],
-        help="Demo scenario to execute (default: normal)",
+        choices=["normal", "hitl"],
+        help="Demo scenario to execute: normal or hitl (default: normal)",
     )
     parser.add_argument(
         "--ticket-id",
@@ -51,44 +55,65 @@ def main() -> None:
 
     print("=" * 70)
     print("🚀 SENTINEL-X: Reproducible Multi-Agent IT Support Triage Demo")
-    print(f"Scenario:     {args.scenario}")
+    print(f"Scenario:     {args.scenario.upper()}")
     print(f"Ticket ID:    {args.ticket_id}")
     print(f"Team:         {args.team}")
     print("=" * 70)
 
-    with start_run(team=args.team) as run_ctx:
-        run_id = run_ctx.run_id
-        trace_id = run_ctx.trace_id
+    run_id: str | None = None
+    trace_id: str | None = None
 
-        print(f"\n[1/3] Initializing Run: {run_id}")
-        print(f"      Trace ID:        {trace_id}")
-        print("\n[2/3] Orchestrating Multi-Agent Workflow...")
-        print("      • Coordinator Agent -> Triage assessment & delegation")
-        print("      • Diagnostic Agent  -> Log analysis & DB health inspection")
-        print("      • Remediation Agent -> Cache eviction & worker node restart\n")
+    try:
+        with start_run(team=args.team) as run_ctx:
+            run_id = run_ctx.run_id
+            trace_id = run_ctx.trace_id
 
-        result = run_coordinator_agent(
-            ticket_id=args.ticket_id,
-            description=args.description,
-        )
+            print(f"\n[1/3] Initializing Run: {run_id}")
+            print(f"      Trace ID:        {trace_id}")
+            print("\n[2/3] Orchestrating Multi-Agent Workflow...")
+            if args.scenario == "hitl":
+                print("      • Coordinator Agent          -> Triage assessment & delegation")
+                print("      • Diagnostic Agent           -> Log analysis & DB health inspection")
+                print("      • Critical Remediation Agent -> Production cluster restart [HITL GATE]\n")
+            else:
+                print("      • Coordinator Agent -> Triage assessment & delegation")
+                print("      • Diagnostic Agent  -> Log analysis & DB health inspection")
+                print("      • Remediation Agent -> Cache eviction & worker node restart\n")
 
-        print("[3/3] Workflow Completed Successfully!")
-        print(f"      Incident Status: {result.get('status', 'UNKNOWN')}")
-        print(f"      Root Cause:      {result.get('diagnosis', {}).get('root_cause', 'N/A')}")
-        print(f"      Actions Taken:   {', '.join(result.get('remediation', {}).get('actions_taken', []))}")
+            try:
+                result = run_coordinator_agent(
+                    ticket_id=args.ticket_id,
+                    description=args.description,
+                    scenario=args.scenario,
+                )
+                print("[3/3] Workflow Completed Successfully!")
+                print(f"      Incident Status: {result.get('status', 'UNKNOWN')}")
+                print(f"      Root Cause:      {result.get('diagnosis', {}).get('root_cause', 'N/A')}")
+                print(f"      Actions Taken:   {', '.join(result.get('remediation', {}).get('actions_taken', []))}")
+            except GovernanceRejectedError as exc:
+                print("[3/3] Workflow Terminated by Human-in-the-Loop Governance Gate:")
+                print("      Status:  REJECTED")
+                print(f"      Reason:  {exc}")
+                print("      High-risk operation was halted. Production cluster state preserved.")
+            except GovernanceTimeoutError as exc:
+                print("[3/3] Workflow Timed Out Waiting for Human Approval:")
+                print("      Status:  TIMED_OUT")
+                print(f"      Reason:  {exc}")
+                print("      High-risk operation was aborted.")
+    finally:
+        # Synchronously flush all trailing telemetry events before exiting
+        print("\n⏳ Flushing telemetry buffer to Sentinel Control Tower...")
+        sentinel_sdk.flush()
+        print("✓ Telemetry flushed.")
 
-    # Synchronously flush all trailing telemetry events before exiting
-    print("\n⏳ Flushing telemetry buffer to Sentinel Control Tower...")
-    sentinel_sdk.flush()
-    print("✓ Telemetry flushed.")
-
-    dashboard_url = f"{args.dashboard_host.rstrip('/')}/runs/{run_id}"
-    print("\n" + "=" * 70)
-    print("📊 Run Lineage & Telemetry Available:")
-    print(f"   Run ID:        {run_id}")
-    print(f"   Trace ID:      {trace_id}")
-    print(f"   Dashboard URL: {dashboard_url}")
-    print("=" * 70)
+    if run_id:
+        dashboard_url = f"{args.dashboard_host.rstrip('/')}/runs/{run_id}"
+        print("\n" + "=" * 70)
+        print("📊 Run Lineage & Telemetry Available:")
+        print(f"   Run ID:        {run_id}")
+        print(f"   Trace ID:      {trace_id}")
+        print(f"   Dashboard URL: {dashboard_url}")
+        print("=" * 70)
 
 
 if __name__ == "__main__":
@@ -97,4 +122,3 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nInterrupted.")
         sys.exit(130)
-

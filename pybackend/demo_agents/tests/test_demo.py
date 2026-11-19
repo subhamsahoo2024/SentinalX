@@ -1,12 +1,23 @@
+from unittest.mock import MagicMock, patch
+
+import pytest
 from sentinel_demo.agents import (
     check_db_metrics,
     clear_stale_cache,
     fetch_service_logs,
     restart_worker_node,
     run_coordinator_agent,
+    run_critical_remediation_agent,
 )
 from sentinel_demo.mock_llm import mock_llm_completion
-from sentinel_sdk import CanonicalEventV1, SpanStatus, SpanType, get_exporter, start_run
+from sentinel_sdk import (
+    CanonicalEventV1,
+    GovernanceRejectedError,
+    SpanStatus,
+    SpanType,
+    get_exporter,
+    start_run,
+)
 
 
 def test_mock_llm_emits_traced_span():
@@ -78,6 +89,7 @@ def test_coordinator_agent_hierarchy():
         res = run_coordinator_agent(
             ticket_id="INC-1234",
             description="Database pool saturation",
+            scenario="normal",
         )
         assert res["status"] == "RESOLVED"
         assert res["ticket_id"] == "INC-1234"
@@ -151,3 +163,82 @@ def test_coordinator_agent_hierarchy():
     assert children_of_remed[0].span_type == SpanType.LLM
     assert children_of_remed[1].operation_name == "clear_stale_cache"
     assert children_of_remed[2].operation_name == "restart_worker_node"
+
+
+def test_critical_remediation_hitl_approved():
+    emitted: list[CanonicalEventV1] = []
+    exporter = get_exporter()
+    exporter.enqueue = lambda e: emitted.append(e)
+
+    def mock_post(url, **kwargs):
+        resp = MagicMock()
+        resp.is_success = True
+        resp.json.return_value = {"approval_id": "apr_demo_hitl", "status": "PENDING"}
+        return resp
+
+    def mock_get(url, **kwargs):
+        resp = MagicMock()
+        resp.is_success = True
+        resp.json.return_value = {
+            "approval_id": "apr_demo_hitl",
+            "status": "APPROVED",
+            "decided_by": "lead-sre",
+            "comment": "Approved following failover protocol",
+        }
+        return resp
+
+    with patch("httpx.Client.post", side_effect=mock_post), patch(
+        "httpx.Client.get", side_effect=mock_get
+    ), start_run(team="it-ops"):
+        res = run_critical_remediation_agent(
+            diagnosis={
+                "cluster": "prod-orders-cluster",
+                "root_cause": "Replication deadlock",
+            }
+        )
+
+    assert res["status"] == "RESOLVED"
+    assert res["cluster"] == "prod-orders-cluster"
+
+    # Verify restart_production_cluster redacted token
+    cluster_spans = [e for e in emitted if e.operation_name == "restart_production_cluster"]
+    assert len(cluster_spans) >= 2
+    assert cluster_spans[0].attributes["inputs"]["auth_token"] == "[REDACTED]"
+
+
+def test_coordinator_hitl_scenario_rejected():
+    emitted: list[CanonicalEventV1] = []
+    exporter = get_exporter()
+    exporter.enqueue = lambda e: emitted.append(e)
+
+    def mock_post(url, **kwargs):
+        resp = MagicMock()
+        resp.is_success = True
+        resp.json.return_value = {"approval_id": "apr_demo_rej", "status": "PENDING"}
+        return resp
+
+    def mock_get(url, **kwargs):
+        resp = MagicMock()
+        resp.is_success = True
+        resp.json.return_value = {
+            "approval_id": "apr_demo_rej",
+            "status": "REJECTED",
+            "decided_by": "incident-commander",
+            "comment": "Peak traffic window: cannot restart primary DB",
+        }
+        return resp
+
+    with patch("httpx.Client.post", side_effect=mock_post), patch(
+        "httpx.Client.get", side_effect=mock_get
+    ), start_run(team="it-ops"), pytest.raises(GovernanceRejectedError) as exc_info:
+        run_coordinator_agent(
+            ticket_id="INC-8492",
+            description="Cluster pool latency",
+            scenario="hitl",
+        )
+
+    assert "Peak traffic window" in str(exc_info.value)
+    # Verify cancelled span was captured
+    cancelled_spans = [e for e in emitted if e.status == SpanStatus.CANCELLED]
+    assert len(cancelled_spans) == 1
+    assert cancelled_spans[0].operation_name == "restart_production_cluster"

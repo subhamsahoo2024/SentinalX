@@ -1,10 +1,15 @@
+import asyncio
 import functools
 import inspect
+import os
+import time
 import traceback
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
+
+import httpx
 
 from sentinel_sdk.context import (
     get_agent_id,
@@ -20,6 +25,11 @@ from sentinel_sdk.context import (
     set_run_id,
     set_team,
     set_trace_id,
+)
+from sentinel_sdk.exceptions import (
+    GovernanceRejectedError,
+    GovernanceTimeoutError,
+    SentinelGovernanceError,
 )
 from sentinel_sdk.exporter import get_exporter
 from sentinel_sdk.redactor import redact_payload
@@ -469,7 +479,722 @@ def trace_tool(
     return decorator
 
 
+def _resolve_sentinel_config() -> tuple[str, str]:
+    exporter = get_exporter()
+    base_url = (
+        getattr(exporter, "base_url", None)
+        or os.getenv("SENTINEL_URL", "http://127.0.0.1:8000")
+    )
+    if "localhost" in base_url:
+        base_url = base_url.replace("localhost", "127.0.0.1")
+    base_url = base_url.rstrip("/")
+    api_key = (
+        getattr(exporter, "api_key", None)
+        or os.getenv("SENTINEL_API_KEY", "dev-secret-key")
+    )
+    return base_url, api_key
+
+
+async def _execute_async_gate(
+    fn: Callable[..., Any],
+    tool_name: str,
+    risk_level: str,
+    policy_reason: str,
+    timeout_seconds: int,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    span_id = f"span_{uuid.uuid4().hex[:12]}"
+    parent_span_id = get_current_span_id()
+    started_at = datetime.now(UTC)
+
+    run_id = get_run_id() or f"run_{uuid.uuid4().hex[:12]}"
+    trace_id = get_trace_id() or uuid.uuid4().hex
+
+    eff_agent_id = get_agent_id() or "default-agent"
+    eff_agent_name = get_agent_name()
+    eff_team = get_team()
+
+    attempt_number = next_attempt_number(run_id, eff_agent_id, tool_name)
+    inputs = _extract_inputs(fn, args, kwargs)
+
+    # a) Emit CanonicalEventV1 with status=SpanStatus.AWAITING_APPROVAL
+    awaiting_event = CanonicalEventV1(
+        event_id=f"evt_{uuid.uuid4().hex[:12]}",
+        trace_id=trace_id,
+        span_id=span_id,
+        parent_span_id=parent_span_id,
+        run_id=run_id,
+        agent_id=eff_agent_id,
+        agent_name=eff_agent_name,
+        team=eff_team,
+        framework="custom",
+        attempt_number=attempt_number,
+        span_type=SpanType.TOOL,
+        operation_name=tool_name,
+        status=SpanStatus.AWAITING_APPROVAL,
+        started_at=started_at,
+        ended_at=None,
+        model=None,
+        usage=None,
+        attributes={"inputs": inputs},
+    )
+    get_exporter().enqueue(awaiting_event)
+
+    # b) Flush immediately so span is persisted in DB before requesting approval
+    get_exporter().flush(timeout=5.0)
+
+    base_url, api_key = _resolve_sentinel_config()
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-Key": api_key,
+    }
+    req_payload = {
+        "run_id": run_id,
+        "span_id": span_id,
+        "agent_id": eff_agent_id,
+        "tool_name": tool_name,
+        "sanitized_args": inputs,
+        "risk_level": risk_level,
+        "policy_reason": policy_reason,
+    }
+
+    prev_span_id = parent_span_id
+    set_current_span_id(span_id)
+
+    try:
+        # c) POST to {SENTINEL_URL}/api/approvals/request
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{base_url}/api/approvals/request",
+                    json=req_payload,
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                approval_data = resp.json()
+                approval_id = approval_data["approval_id"]
+        except httpx.HTTPError as exc:
+            ended_at = datetime.now(UTC)
+            error_info = ErrorInfo(
+                error_class=type(exc).__name__,
+                message=f"Failed to submit approval request: {exc}",
+                stack_summary=traceback.format_exc(),
+            )
+            fail_event = CanonicalEventV1(
+                event_id=f"evt_{uuid.uuid4().hex[:12]}",
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=parent_span_id,
+                run_id=run_id,
+                agent_id=eff_agent_id,
+                agent_name=eff_agent_name,
+                team=eff_team,
+                framework="custom",
+                attempt_number=attempt_number,
+                span_type=SpanType.TOOL,
+                operation_name=tool_name,
+                status=SpanStatus.FAILED,
+                started_at=started_at,
+                ended_at=ended_at,
+                model=None,
+                usage=None,
+                error=error_info,
+                attributes={"inputs": inputs},
+            )
+            get_exporter().enqueue(fail_event)
+            get_exporter().flush(timeout=5.0)
+            raise SentinelGovernanceError(
+                f"Failed to submit approval request for tool '{tool_name}': {exc}"
+            ) from exc
+
+        # d) Poll GET {SENTINEL_URL}/api/approvals/{approval_id}/wait?timeout=20
+        start_poll = time.monotonic()
+        decision_status: str | None = None
+        decision_data: dict[str, Any] = {}
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            while True:
+                elapsed = time.monotonic() - start_poll
+                remaining = timeout_seconds - elapsed
+                if remaining <= 0:
+                    break
+                wait_timeout = min(20, max(1, int(remaining)))
+                try:
+                    poll_resp = await client.get(
+                        f"{base_url}/api/approvals/{approval_id}/wait?timeout={wait_timeout}",
+                        headers=headers,
+                        timeout=float(wait_timeout + 5),
+                    )
+                    if poll_resp.is_success:
+                        decision_data = poll_resp.json()
+                        current_status = decision_data.get("status")
+                        if current_status in ("APPROVED", "REJECTED"):
+                            decision_status = current_status
+                            break
+                except httpx.TimeoutException:
+                    pass
+                except httpx.HTTPError:
+                    await asyncio.sleep(0.5)
+
+        # e) If APPROVED:
+        if decision_status == "APPROVED":
+            running_event = CanonicalEventV1(
+                event_id=f"evt_{uuid.uuid4().hex[:12]}",
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=parent_span_id,
+                run_id=run_id,
+                agent_id=eff_agent_id,
+                agent_name=eff_agent_name,
+                team=eff_team,
+                framework="custom",
+                attempt_number=attempt_number,
+                span_type=SpanType.TOOL,
+                operation_name=tool_name,
+                status=SpanStatus.RUNNING,
+                started_at=started_at,
+                ended_at=None,
+                model=None,
+                usage=None,
+                attributes={"inputs": inputs},
+            )
+            get_exporter().enqueue(running_event)
+
+            try:
+                result = await fn(*args, **kwargs)
+                ended_at = datetime.now(UTC)
+                token_usage = _extract_token_usage(result)
+                attributes = {
+                    "inputs": inputs,
+                    "output": redact_payload(result),
+                }
+                success_event = CanonicalEventV1(
+                    event_id=f"evt_{uuid.uuid4().hex[:12]}",
+                    trace_id=trace_id,
+                    span_id=span_id,
+                    parent_span_id=parent_span_id,
+                    run_id=run_id,
+                    agent_id=eff_agent_id,
+                    agent_name=eff_agent_name,
+                    team=eff_team,
+                    framework="custom",
+                    attempt_number=attempt_number,
+                    span_type=SpanType.TOOL,
+                    operation_name=tool_name,
+                    status=SpanStatus.SUCCEEDED,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    model=None,
+                    usage=token_usage,
+                    attributes=attributes,
+                )
+                get_exporter().enqueue(success_event)
+                return result
+            except BaseException as exc:
+                ended_at = datetime.now(UTC)
+                error_info = ErrorInfo(
+                    error_class=type(exc).__name__,
+                    message=str(exc),
+                    stack_summary=traceback.format_exc(),
+                )
+                fail_event = CanonicalEventV1(
+                    event_id=f"evt_{uuid.uuid4().hex[:12]}",
+                    trace_id=trace_id,
+                    span_id=span_id,
+                    parent_span_id=parent_span_id,
+                    run_id=run_id,
+                    agent_id=eff_agent_id,
+                    agent_name=eff_agent_name,
+                    team=eff_team,
+                    framework="custom",
+                    attempt_number=attempt_number,
+                    span_type=SpanType.TOOL,
+                    operation_name=tool_name,
+                    status=SpanStatus.FAILED,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    model=None,
+                    usage=None,
+                    error=error_info,
+                    attributes={"inputs": inputs},
+                )
+                get_exporter().enqueue(fail_event)
+                raise
+
+        # f) If REJECTED:
+        elif decision_status == "REJECTED":
+            ended_at = datetime.now(UTC)
+            rejection_comment = (
+                decision_data.get("comment")
+                or "Tool execution rejected by human approver"
+            )
+            error_info = ErrorInfo(
+                error_class="GovernanceRejectedError",
+                message=f"Tool execution '{tool_name}' was rejected: {rejection_comment}",
+            )
+            attributes = {
+                "inputs": inputs,
+                "rejection": {
+                    "decided_by": decision_data.get("decided_by"),
+                    "comment": decision_data.get("comment"),
+                },
+            }
+            cancelled_event = CanonicalEventV1(
+                event_id=f"evt_{uuid.uuid4().hex[:12]}",
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=parent_span_id,
+                run_id=run_id,
+                agent_id=eff_agent_id,
+                agent_name=eff_agent_name,
+                team=eff_team,
+                framework="custom",
+                attempt_number=attempt_number,
+                span_type=SpanType.TOOL,
+                operation_name=tool_name,
+                status=SpanStatus.CANCELLED,
+                started_at=started_at,
+                ended_at=ended_at,
+                model=None,
+                usage=None,
+                error=error_info,
+                attributes=attributes,
+            )
+            get_exporter().enqueue(cancelled_event)
+            get_exporter().flush(timeout=5.0)
+            raise GovernanceRejectedError(
+                f"Tool execution '{tool_name}' was rejected by human approver: {rejection_comment}"
+            )
+
+        # Timed out:
+        else:
+            ended_at = datetime.now(UTC)
+            error_info = ErrorInfo(
+                error_class="GovernanceTimeoutError",
+                message=(
+                    f"Tool execution '{tool_name}' timed out after "
+                    f"{timeout_seconds}s waiting for human approval"
+                ),
+            )
+            timed_out_event = CanonicalEventV1(
+                event_id=f"evt_{uuid.uuid4().hex[:12]}",
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=parent_span_id,
+                run_id=run_id,
+                agent_id=eff_agent_id,
+                agent_name=eff_agent_name,
+                team=eff_team,
+                framework="custom",
+                attempt_number=attempt_number,
+                span_type=SpanType.TOOL,
+                operation_name=tool_name,
+                status=SpanStatus.TIMED_OUT,
+                started_at=started_at,
+                ended_at=ended_at,
+                model=None,
+                usage=None,
+                error=error_info,
+                attributes={"inputs": inputs},
+            )
+            get_exporter().enqueue(timed_out_event)
+            get_exporter().flush(timeout=5.0)
+            raise GovernanceTimeoutError(
+                f"Tool execution '{tool_name}' timed out after {timeout_seconds}s waiting for human approval"
+            )
+    finally:
+        set_current_span_id(prev_span_id)
+
+
+def _execute_sync_gate(
+    fn: Callable[..., Any],
+    tool_name: str,
+    risk_level: str,
+    policy_reason: str,
+    timeout_seconds: int,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    span_id = f"span_{uuid.uuid4().hex[:12]}"
+    parent_span_id = get_current_span_id()
+    started_at = datetime.now(UTC)
+
+    run_id = get_run_id() or f"run_{uuid.uuid4().hex[:12]}"
+    trace_id = get_trace_id() or uuid.uuid4().hex
+
+    eff_agent_id = get_agent_id() or "default-agent"
+    eff_agent_name = get_agent_name()
+    eff_team = get_team()
+
+    attempt_number = next_attempt_number(run_id, eff_agent_id, tool_name)
+    inputs = _extract_inputs(fn, args, kwargs)
+
+    # a) Emit CanonicalEventV1 with status=SpanStatus.AWAITING_APPROVAL
+    awaiting_event = CanonicalEventV1(
+        event_id=f"evt_{uuid.uuid4().hex[:12]}",
+        trace_id=trace_id,
+        span_id=span_id,
+        parent_span_id=parent_span_id,
+        run_id=run_id,
+        agent_id=eff_agent_id,
+        agent_name=eff_agent_name,
+        team=eff_team,
+        framework="custom",
+        attempt_number=attempt_number,
+        span_type=SpanType.TOOL,
+        operation_name=tool_name,
+        status=SpanStatus.AWAITING_APPROVAL,
+        started_at=started_at,
+        ended_at=None,
+        model=None,
+        usage=None,
+        attributes={"inputs": inputs},
+    )
+    get_exporter().enqueue(awaiting_event)
+
+    # b) Flush immediately so span is persisted in DB before requesting approval
+    get_exporter().flush(timeout=5.0)
+
+    base_url, api_key = _resolve_sentinel_config()
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-Key": api_key,
+    }
+    req_payload = {
+        "run_id": run_id,
+        "span_id": span_id,
+        "agent_id": eff_agent_id,
+        "tool_name": tool_name,
+        "sanitized_args": inputs,
+        "risk_level": risk_level,
+        "policy_reason": policy_reason,
+    }
+
+    prev_span_id = parent_span_id
+    set_current_span_id(span_id)
+
+    try:
+        # c) POST to {SENTINEL_URL}/api/approvals/request
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.post(
+                    f"{base_url}/api/approvals/request",
+                    json=req_payload,
+                    headers=headers,
+                )
+                resp.raise_for_status()
+                approval_data = resp.json()
+                approval_id = approval_data["approval_id"]
+        except httpx.HTTPError as exc:
+            ended_at = datetime.now(UTC)
+            error_info = ErrorInfo(
+                error_class=type(exc).__name__,
+                message=f"Failed to submit approval request: {exc}",
+                stack_summary=traceback.format_exc(),
+            )
+            fail_event = CanonicalEventV1(
+                event_id=f"evt_{uuid.uuid4().hex[:12]}",
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=parent_span_id,
+                run_id=run_id,
+                agent_id=eff_agent_id,
+                agent_name=eff_agent_name,
+                team=eff_team,
+                framework="custom",
+                attempt_number=attempt_number,
+                span_type=SpanType.TOOL,
+                operation_name=tool_name,
+                status=SpanStatus.FAILED,
+                started_at=started_at,
+                ended_at=ended_at,
+                model=None,
+                usage=None,
+                error=error_info,
+                attributes={"inputs": inputs},
+            )
+            get_exporter().enqueue(fail_event)
+            get_exporter().flush(timeout=5.0)
+            raise SentinelGovernanceError(
+                f"Failed to submit approval request for tool '{tool_name}': {exc}"
+            ) from exc
+
+        # d) Poll GET {SENTINEL_URL}/api/approvals/{approval_id}/wait?timeout=20
+        start_poll = time.monotonic()
+        decision_status: str | None = None
+        decision_data: dict[str, Any] = {}
+
+        with httpx.Client(timeout=30.0) as client:
+            while True:
+                elapsed = time.monotonic() - start_poll
+                remaining = timeout_seconds - elapsed
+                if remaining <= 0:
+                    break
+                wait_timeout = min(20, max(1, int(remaining)))
+                try:
+                    poll_resp = client.get(
+                        f"{base_url}/api/approvals/{approval_id}/wait?timeout={wait_timeout}",
+                        headers=headers,
+                        timeout=float(wait_timeout + 5),
+                    )
+                    if poll_resp.is_success:
+                        decision_data = poll_resp.json()
+                        current_status = decision_data.get("status")
+                        if current_status in ("APPROVED", "REJECTED"):
+                            decision_status = current_status
+                            break
+                except httpx.TimeoutException:
+                    pass
+                except httpx.HTTPError:
+                    time.sleep(0.5)
+
+        # e) If APPROVED:
+        if decision_status == "APPROVED":
+            running_event = CanonicalEventV1(
+                event_id=f"evt_{uuid.uuid4().hex[:12]}",
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=parent_span_id,
+                run_id=run_id,
+                agent_id=eff_agent_id,
+                agent_name=eff_agent_name,
+                team=eff_team,
+                framework="custom",
+                attempt_number=attempt_number,
+                span_type=SpanType.TOOL,
+                operation_name=tool_name,
+                status=SpanStatus.RUNNING,
+                started_at=started_at,
+                ended_at=None,
+                model=None,
+                usage=None,
+                attributes={"inputs": inputs},
+            )
+            get_exporter().enqueue(running_event)
+
+            try:
+                result = fn(*args, **kwargs)
+                ended_at = datetime.now(UTC)
+                token_usage = _extract_token_usage(result)
+                attributes = {
+                    "inputs": inputs,
+                    "output": redact_payload(result),
+                }
+                success_event = CanonicalEventV1(
+                    event_id=f"evt_{uuid.uuid4().hex[:12]}",
+                    trace_id=trace_id,
+                    span_id=span_id,
+                    parent_span_id=parent_span_id,
+                    run_id=run_id,
+                    agent_id=eff_agent_id,
+                    agent_name=eff_agent_name,
+                    team=eff_team,
+                    framework="custom",
+                    attempt_number=attempt_number,
+                    span_type=SpanType.TOOL,
+                    operation_name=tool_name,
+                    status=SpanStatus.SUCCEEDED,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    model=None,
+                    usage=token_usage,
+                    attributes=attributes,
+                )
+                get_exporter().enqueue(success_event)
+                return result
+            except BaseException as exc:
+                ended_at = datetime.now(UTC)
+                error_info = ErrorInfo(
+                    error_class=type(exc).__name__,
+                    message=str(exc),
+                    stack_summary=traceback.format_exc(),
+                )
+                fail_event = CanonicalEventV1(
+                    event_id=f"evt_{uuid.uuid4().hex[:12]}",
+                    trace_id=trace_id,
+                    span_id=span_id,
+                    parent_span_id=parent_span_id,
+                    run_id=run_id,
+                    agent_id=eff_agent_id,
+                    agent_name=eff_agent_name,
+                    team=eff_team,
+                    framework="custom",
+                    attempt_number=attempt_number,
+                    span_type=SpanType.TOOL,
+                    operation_name=tool_name,
+                    status=SpanStatus.FAILED,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    model=None,
+                    usage=None,
+                    error=error_info,
+                    attributes={"inputs": inputs},
+                )
+                get_exporter().enqueue(fail_event)
+                raise
+
+        # f) If REJECTED:
+        elif decision_status == "REJECTED":
+            ended_at = datetime.now(UTC)
+            rejection_comment = (
+                decision_data.get("comment")
+                or "Tool execution rejected by human approver"
+            )
+            error_info = ErrorInfo(
+                error_class="GovernanceRejectedError",
+                message=f"Tool execution '{tool_name}' was rejected: {rejection_comment}",
+            )
+            attributes = {
+                "inputs": inputs,
+                "rejection": {
+                    "decided_by": decision_data.get("decided_by"),
+                    "comment": decision_data.get("comment"),
+                },
+            }
+            cancelled_event = CanonicalEventV1(
+                event_id=f"evt_{uuid.uuid4().hex[:12]}",
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=parent_span_id,
+                run_id=run_id,
+                agent_id=eff_agent_id,
+                agent_name=eff_agent_name,
+                team=eff_team,
+                framework="custom",
+                attempt_number=attempt_number,
+                span_type=SpanType.TOOL,
+                operation_name=tool_name,
+                status=SpanStatus.CANCELLED,
+                started_at=started_at,
+                ended_at=ended_at,
+                model=None,
+                usage=None,
+                error=error_info,
+                attributes=attributes,
+            )
+            get_exporter().enqueue(cancelled_event)
+            get_exporter().flush(timeout=5.0)
+            raise GovernanceRejectedError(
+                f"Tool execution '{tool_name}' was rejected by human approver: {rejection_comment}"
+            )
+
+        # Timed out:
+        else:
+            ended_at = datetime.now(UTC)
+            error_info = ErrorInfo(
+                error_class="GovernanceTimeoutError",
+                message=(
+                    f"Tool execution '{tool_name}' timed out after "
+                    f"{timeout_seconds}s waiting for human approval"
+                ),
+            )
+            timed_out_event = CanonicalEventV1(
+                event_id=f"evt_{uuid.uuid4().hex[:12]}",
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=parent_span_id,
+                run_id=run_id,
+                agent_id=eff_agent_id,
+                agent_name=eff_agent_name,
+                team=eff_team,
+                framework="custom",
+                attempt_number=attempt_number,
+                span_type=SpanType.TOOL,
+                operation_name=tool_name,
+                status=SpanStatus.TIMED_OUT,
+                started_at=started_at,
+                ended_at=ended_at,
+                model=None,
+                usage=None,
+                error=error_info,
+                attributes={"inputs": inputs},
+            )
+            get_exporter().enqueue(timed_out_event)
+            get_exporter().flush(timeout=5.0)
+            raise GovernanceTimeoutError(
+                f"Tool execution '{tool_name}' timed out after {timeout_seconds}s waiting for human approval"
+            )
+    finally:
+        set_current_span_id(prev_span_id)
+
+
+def _gate_tool_wrapper(
+    fn: Callable[..., Any],
+    tool_name: str,
+    risk_level: str,
+    policy_reason: str,
+    timeout_seconds: int,
+) -> Callable[..., Any]:
+    if inspect.iscoroutinefunction(fn):
+
+        @functools.wraps(fn)
+        async def async_gate_wrapper(*args: Any, **kwargs: Any) -> Any:
+            return await _execute_async_gate(
+                fn=fn,
+                tool_name=tool_name,
+                risk_level=risk_level,
+                policy_reason=policy_reason,
+                timeout_seconds=timeout_seconds,
+                args=args,
+                kwargs=kwargs,
+            )
+
+        return async_gate_wrapper
+
+    @functools.wraps(fn)
+    def sync_gate_wrapper(*args: Any, **kwargs: Any) -> Any:
+        return _execute_sync_gate(
+            fn=fn,
+            tool_name=tool_name,
+            risk_level=risk_level,
+            policy_reason=policy_reason,
+            timeout_seconds=timeout_seconds,
+            args=args,
+            kwargs=kwargs,
+        )
+
+    return sync_gate_wrapper
+
+
+def gate_tool(
+    tool_name: str | Callable[..., Any] | None = None,
+    risk_level: str = "HIGH",
+    policy_reason: str = "Protected tool execution requires human approval",
+    timeout_seconds: int = 120,
+) -> Any:
+    """Decorator for synchronous Human-in-the-Loop pre-execution approval gate.
+
+    Emits an AWAITING_APPROVAL span, flushes immediately to Sentinel backend,
+    requests approval, and polls until APPROVED, REJECTED, or timed out.
+    """
+    if callable(tool_name):
+        fn = tool_name
+        return _gate_tool_wrapper(
+            fn=fn,
+            tool_name=fn.__name__,
+            risk_level=risk_level,
+            policy_reason=policy_reason,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
+        op_name = (
+            tool_name if isinstance(tool_name, str) and tool_name else fn.__name__
+        )
+        return _gate_tool_wrapper(
+            fn=fn,
+            tool_name=op_name,
+            risk_level=risk_level,
+            policy_reason=policy_reason,
+            timeout_seconds=timeout_seconds,
+        )
+
+    return decorator
+
+
 __all__ = [
+    "gate_tool",
     "trace_agent",
     "trace_llm",
     "trace_tool",
