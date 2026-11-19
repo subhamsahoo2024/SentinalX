@@ -1,3 +1,4 @@
+from sentinel_backend.schemas.alerts import AlertDTO
 from sentinel_backend.schemas.governance import (
     ApprovalDecisionRequest,
     ApprovalDTO,
@@ -21,6 +22,7 @@ from sentinel_backend.schemas.telemetry import (
 )
 
 __all__ = [
+    "AlertDTO",
     "ApprovalDTO",
     "ApprovalDecisionRequest",
     "ApprovalRequestCreate",

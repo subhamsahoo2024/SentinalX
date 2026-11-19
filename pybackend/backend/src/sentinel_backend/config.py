@@ -1,4 +1,5 @@
 from pathlib import Path
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,6 +25,12 @@ class Settings(BaseSettings):
     )
     REDIS_URL: str = "redis://localhost:6379/0"
     SENTINEL_API_KEY: str = "dev-secret-key"
+
+    # Deterministic anomaly detection & watchdog thresholds
+    LOOP_THRESHOLD_COUNT: int = 3
+    LOOP_WINDOW_SECONDS: int = 30
+    RUN_TOKEN_BUDGET: int = 5000
+    RUN_STALL_TIMEOUT_SEC: int = 25
 
 
 settings = Settings()
