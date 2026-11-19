@@ -1,3 +1,9 @@
+from sentinel_backend.schemas.governance import (
+    ApprovalDecisionRequest,
+    ApprovalDTO,
+    ApprovalRequestCreate,
+    AuditEventDTO,
+)
 from sentinel_backend.schemas.telemetry import (
     CanonicalEventV1,
     CostBasis,
@@ -15,18 +21,21 @@ from sentinel_backend.schemas.telemetry import (
 )
 
 __all__ = [
-    "SpanType",
-    "SpanStatus",
+    "ApprovalDTO",
+    "ApprovalDecisionRequest",
+    "ApprovalRequestCreate",
+    "AuditEventDTO",
+    "CanonicalEventV1",
     "CostBasis",
-    "ModelInfo",
-    "TokenUsage",
     "CostInfo",
     "ErrorInfo",
-    "CanonicalEventV1",
-    "TelemetryBatchRequest",
-    "RunSummaryDTO",
-    "LineageNodeDTO",
     "LineageEdgeDTO",
     "LineageGraphDTO",
+    "LineageNodeDTO",
+    "ModelInfo",
+    "RunSummaryDTO",
+    "SpanStatus",
+    "SpanType",
+    "TelemetryBatchRequest",
+    "TokenUsage",
 ]
-

@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from sentinel_backend.api import agents, runs, telemetry, ws
+from sentinel_backend.api import agents, approvals, runs, telemetry, ws
 from sentinel_backend.db.session import async_session_maker, engine
 from sentinel_backend.services.redis_bus import (
     close_redis,
@@ -57,6 +57,7 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 app.include_router(telemetry.router)
 app.include_router(agents.router)
 app.include_router(runs.router)
+app.include_router(approvals.router)
 app.include_router(ws.router)
 
 
