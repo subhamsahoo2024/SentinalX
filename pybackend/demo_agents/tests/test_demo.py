@@ -242,3 +242,118 @@ def test_coordinator_hitl_scenario_rejected():
     cancelled_spans = [e for e in emitted if e.status == SpanStatus.CANCELLED]
     assert len(cancelled_spans) == 1
     assert cancelled_spans[0].operation_name == "restart_production_cluster"
+
+
+def test_scenario_loop():
+    emitted: list[CanonicalEventV1] = []
+    exporter = get_exporter()
+    exporter.enqueue = lambda e: emitted.append(e)
+
+    with start_run(team="it-ops"):
+        res = run_coordinator_agent(
+            ticket_id="INC-LOOP",
+            description="Flaky endpoint testing",
+            scenario="loop",
+        )
+        assert res["status"] == "ABORTED"
+        assert res["diagnosis"]["loop_count"] == 4
+
+    # Filter query_flaky_endpoint spans
+    flaky_spans = [
+        e
+        for e in emitted
+        if e.operation_name == "query_flaky_endpoint"
+        and e.status == SpanStatus.RUNNING
+    ]
+    assert len(flaky_spans) == 4
+    # Check sequential attempt numbers: 1, 2, 3, 4
+    attempt_numbers = [s.attempt_number for s in flaky_spans]
+    assert attempt_numbers == [1, 2, 3, 4]
+
+    # Verify each has distinct span_id
+    span_ids = [s.span_id for s in flaky_spans]
+    assert len(set(span_ids)) == 4
+
+    # Verify identical inputs
+    for s in flaky_spans:
+        assert s.attributes["inputs"]["endpoint"] == "/api/v1/health"
+        assert s.attributes["inputs"]["retry_mode"] == "immediate"
+
+
+def test_scenario_budget():
+    emitted: list[CanonicalEventV1] = []
+    exporter = get_exporter()
+    exporter.enqueue = lambda e: emitted.append(e)
+
+    with start_run(team="it-ops"):
+        res = run_coordinator_agent(
+            ticket_id="INC-BUDGET",
+            description="Exhaustive memory dump analysis",
+            scenario="budget",
+        )
+        assert res["status"] == "RESOLVED"
+
+    # Find LLM spans
+    llm_spans = [
+        e
+        for e in emitted
+        if e.span_type == SpanType.LLM and e.status == SpanStatus.SUCCEEDED
+    ]
+    total_tokens = sum(
+        (s.usage.input_tokens or 0) + (s.usage.output_tokens or 0)
+        for s in llm_spans
+        if s.usage
+    )
+    # Exceeds the 5,000 RUN_TOKEN_BUDGET
+    assert total_tokens > 5000
+    assert total_tokens >= 7000
+
+
+def test_scenario_cascade():
+    emitted: list[CanonicalEventV1] = []
+    exporter = get_exporter()
+    exporter.enqueue = lambda e: emitted.append(e)
+
+    with start_run(team="it-ops"), pytest.raises(RuntimeError) as exc_info:
+        run_coordinator_agent(
+            ticket_id="INC-CASCADE",
+            description="Schema failure cascade",
+            scenario="cascade",
+        )
+
+    assert "missing target cluster metadata" in str(exc_info.value)
+
+    # Verify multi-hop failure chain in emitted spans
+    failed_spans = [e for e in emitted if e.status == SpanStatus.FAILED]
+    failed_op_names = {s.operation_name for s in failed_spans}
+    assert "fetch_corrupt_config" in failed_op_names
+    assert "run_corrupt_schema_diagnostic" in failed_op_names
+    assert "run_remediation_agent" in failed_op_names
+    assert "run_coordinator_agent" in failed_op_names
+
+
+def test_scenario_stall():
+    emitted: list[CanonicalEventV1] = []
+    exporter = get_exporter()
+    exporter.enqueue = lambda e: emitted.append(e)
+
+    with patch("sentinel_sdk.flush") as mock_flush, start_run(team="it-ops"):
+        res = run_coordinator_agent(
+            ticket_id="INC-STALL",
+            description="Stall test",
+            scenario="stall",
+            stall_duration_sec=0,
+            exit_on_stall=False,
+        )
+        assert res["status"] == "STALLED"
+        mock_flush.assert_called_once()
+
+    # Initial RUNNING span emitted for coordinator
+    coord_spans = [
+        e
+        for e in emitted
+        if e.operation_name == "run_coordinator_agent"
+        and e.status == SpanStatus.RUNNING
+    ]
+    assert len(coord_spans) >= 1
+

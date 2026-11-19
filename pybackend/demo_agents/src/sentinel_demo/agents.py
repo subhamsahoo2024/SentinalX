@@ -1,6 +1,8 @@
+import os
 import time
 from typing import Any
 
+import sentinel_sdk
 from sentinel_sdk import gate_tool, trace_agent, trace_tool
 
 from sentinel_demo.mock_llm import mock_llm_completion
@@ -107,6 +109,28 @@ def restart_production_cluster(
     }
 
 
+@trace_tool(tool_name="query_flaky_endpoint")
+def query_flaky_endpoint(
+    endpoint: str = "/api/v1/health",
+    retry_mode: str = "immediate",
+) -> dict[str, Any]:
+    """Query an unstable external endpoint simulating transient failure."""
+    time.sleep(0.08)
+    return {
+        "endpoint": endpoint,
+        "retry_mode": retry_mode,
+        "http_status": 503,
+        "error": "Service Unavailable: Backend connection drained",
+    }
+
+
+@trace_tool(tool_name="fetch_corrupt_config")
+def fetch_corrupt_config(env: str = "prod") -> dict[str, Any]:
+    """Fetch cluster runtime configuration from config registry."""
+    time.sleep(0.1)
+    raise ValueError("Malformed JSON schema in upstream config registry")
+
+
 # ============================================================================
 # Instrumented Agents
 # ============================================================================
@@ -160,6 +184,79 @@ def run_diagnostic_agent(incident: dict[str, Any]) -> dict[str, Any]:
 
 
 @trace_agent(
+    agent_id="looping-diagnostic-agent",
+    name="Looping Diagnostic Agent",
+    team="it-ops",
+    framework="custom",
+)
+def run_looping_diagnostic_agent(incident: dict[str, Any]) -> dict[str, Any]:
+    """Diagnostic agent that repeatedly retries a flaky endpoint without backoff, causing a tool loop."""
+    endpoint = incident.get("endpoint", "/api/v1/health")
+    retry_mode = incident.get("retry_mode", "immediate")
+    responses: list[dict[str, Any]] = []
+    # Call 4 times consecutively with identical arguments before aborting
+    for _ in range(4):
+        res = query_flaky_endpoint(endpoint=endpoint, retry_mode=retry_mode)
+        responses.append(res)
+
+    return {
+        "status": "ABORTED",
+        "service": incident.get("service", "auth-service"),
+        "loop_count": len(responses),
+        "last_response": responses[-1] if responses else None,
+        "reason": "Aborted after 4 consecutive failed probe attempts to flaky endpoint",
+    }
+
+
+@trace_agent(
+    agent_id="verbose-analysis-agent",
+    name="Verbose Analysis Agent",
+    team="it-ops",
+    framework="custom",
+)
+def run_verbose_analysis_agent(incident: dict[str, Any]) -> dict[str, Any]:
+    """Agent that performs deep system analysis with exhaustive multi-log context, exceeding token budget."""
+    # Build oversized context prompt totaling ~7,500 tokens
+    # 24 words * 102 repetitions = 2,448 words -> 2,448 * 3 = 7,344 input tokens.
+    chunk = (
+        "Detailed system telemetry analysis: inspect thread dump stack traces, "
+        "TCP socket connection buffers, worker queue latencies, garbage collection pauses, "
+        "and replication sync states across distributed database shards. "
+    )
+    oversized_prompt = (
+        (chunk * 102)
+        + f"Incident description: {incident.get('description', '')}"
+    )
+
+    llm_res = mock_llm_completion(
+        prompt=oversized_prompt,
+        latency_ms=150,
+    )
+
+    return {
+        "status": "ANALYSIS_COMPLETE",
+        "service": incident.get("service", "auth-service"),
+        "total_tokens_consumed": (
+            llm_res["usage"]["input_tokens"] + llm_res["usage"]["output_tokens"]
+        ),
+        "summary": llm_res["content"],
+    }
+
+
+@trace_agent(
+    agent_id="corrupt-schema-diagnostic",
+    name="Corrupt Schema Diagnostic Agent",
+    team="it-ops",
+    framework="custom",
+)
+def run_corrupt_schema_diagnostic(incident: dict[str, Any]) -> dict[str, Any]:
+    """Diagnostic agent that attempts to read corrupt configuration."""
+    env = incident.get("env", "prod")
+    config = fetch_corrupt_config(env=env)
+    return {"status": "SUCCESS", "config": config}
+
+
+@trace_agent(
     agent_id="remediation-agent",
     name="Remediation Agent",
     team="it-ops",
@@ -167,6 +264,11 @@ def run_diagnostic_agent(incident: dict[str, Any]) -> dict[str, Any]:
 )
 def run_remediation_agent(diagnosis: dict[str, Any]) -> dict[str, Any]:
     """Execute remediation actions recommended by diagnostic agent."""
+    if not diagnosis or not diagnosis.get("affected_node"):
+        raise RuntimeError(
+            "Cannot remediate: missing target cluster metadata from upstream diagnostic"
+        )
+
     region = diagnosis.get("region", "us-east-1")
     node_id = diagnosis.get("affected_node", "node-04")
 
@@ -249,8 +351,21 @@ def run_coordinator_agent(
     ticket_id: str,
     description: str,
     scenario: str = "normal",
+    stall_duration_sec: float = 30.0,
+    exit_on_stall: bool = True,
 ) -> dict[str, Any]:
     """Triage incoming IT support ticket and orchestrate diagnostic and remediation agents."""
+    # Scenario: stall
+    if scenario == "stall":
+        # Initial RUNNING span has already been emitted upon entering @trace_agent.
+        # Synchronously flush to backend so Run is RUNNING in database.
+        sentinel_sdk.flush()
+        if stall_duration_sec > 0:
+            time.sleep(stall_duration_sec)
+        if exit_on_stall:
+            os._exit(0)
+        return {"status": "STALLED"}
+
     # Step 1: Initial Triage Reasoning
     triage_llm = mock_llm_completion(
         prompt=f"Triage IT support ticket {ticket_id}: {description} (scenario={scenario})",
@@ -265,7 +380,61 @@ def run_coordinator_agent(
         "region": "us-east-1",
     }
 
-    # Step 2: Delegate to Diagnostic Agent
+    # Scenario: loop
+    if scenario == "loop":
+        diagnosis = run_looping_diagnostic_agent(incident=incident)
+        return {
+            "ticket_id": ticket_id,
+            "description": description,
+            "scenario": scenario,
+            "status": "ABORTED",
+            "triage_assessment": triage_llm["content"],
+            "diagnosis": diagnosis,
+            "resolved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+
+    # Scenario: budget
+    if scenario == "budget":
+        diagnosis = run_verbose_analysis_agent(incident=incident)
+        remediation = run_remediation_agent(
+            diagnosis={
+                "status": "DIAGNOSED",
+                "affected_node": "node-04",
+                "region": "us-east-1",
+                "root_cause": "Excessive token volume analyzed.",
+            }
+        )
+        return {
+            "ticket_id": ticket_id,
+            "description": description,
+            "scenario": scenario,
+            "status": "RESOLVED",
+            "triage_assessment": triage_llm["content"],
+            "diagnosis": diagnosis,
+            "remediation": remediation,
+            "resolved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+
+    # Scenario: cascade
+    if scenario == "cascade":
+        corrupt_payload: dict[str, Any] = {}
+        try:
+            run_corrupt_schema_diagnostic(incident=incident)
+        except ValueError:
+            corrupt_payload = {}
+
+        # Pass empty/corrupt payload to remediation agent, which fails with RuntimeError
+        remediation = run_remediation_agent(diagnosis=corrupt_payload)
+        return {
+            "ticket_id": ticket_id,
+            "description": description,
+            "scenario": scenario,
+            "status": "RESOLVED",
+            "diagnosis": {},
+            "remediation": remediation,
+        }
+
+    # Step 2: Delegate to Diagnostic Agent (normal / hitl)
     diagnosis = run_diagnostic_agent(incident=incident)
 
     # Step 3: Delegate to Remediation Agent based on scenario
@@ -289,11 +458,16 @@ def run_coordinator_agent(
 __all__ = [
     "check_db_metrics",
     "clear_stale_cache",
+    "fetch_corrupt_config",
     "fetch_service_logs",
+    "query_flaky_endpoint",
     "restart_production_cluster",
     "restart_worker_node",
     "run_coordinator_agent",
+    "run_corrupt_schema_diagnostic",
     "run_critical_remediation_agent",
     "run_diagnostic_agent",
+    "run_looping_diagnostic_agent",
     "run_remediation_agent",
+    "run_verbose_analysis_agent",
 ]

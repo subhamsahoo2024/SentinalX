@@ -20,8 +20,8 @@ def main() -> None:
         "--scenario",
         type=str,
         default="normal",
-        choices=["normal", "hitl"],
-        help="Demo scenario to execute: normal or hitl (default: normal)",
+        choices=["normal", "hitl", "loop", "budget", "cascade", "stall"],
+        help="Demo scenario to execute: normal, hitl, loop, budget, cascade, stall (default: normal)",
     )
     parser.add_argument(
         "--ticket-id",
@@ -75,6 +75,19 @@ def main() -> None:
                 print("      • Coordinator Agent          -> Triage assessment & delegation")
                 print("      • Diagnostic Agent           -> Log analysis & DB health inspection")
                 print("      • Critical Remediation Agent -> Production cluster restart [HITL GATE]\n")
+            elif args.scenario == "loop":
+                print("      • Coordinator Agent        -> Triage assessment & delegation")
+                print("      • Looping Diagnostic Agent -> Flaky endpoint probe (4 consecutive retries) [LOOP DETECTED]\n")
+            elif args.scenario == "budget":
+                print("      • Coordinator Agent        -> Triage assessment & delegation")
+                print("      • Verbose Analysis Agent   -> Exhaustive context inference (~7,500 tokens) [BUDGET EXCEEDED]\n")
+            elif args.scenario == "cascade":
+                print("      • Coordinator Agent        -> Triage assessment & delegation")
+                print("      • Corrupt Diagnostic Agent -> Upstream schema fetch failure (root cause)")
+                print("      • Remediation Agent        -> Downstream execution crash [CASCADE FAILURE]\n")
+            elif args.scenario == "stall":
+                print("      • Coordinator Agent        -> Initial RUNNING span emitted and flushed")
+                print("      • Watchdog Monitor         -> 30s silence window [RUN STALLED WATCHDOG]\n")
             else:
                 print("      • Coordinator Agent -> Triage assessment & delegation")
                 print("      • Diagnostic Agent  -> Log analysis & DB health inspection")
@@ -100,6 +113,14 @@ def main() -> None:
                 print("      Status:  TIMED_OUT")
                 print(f"      Reason:  {exc}")
                 print("      High-risk operation was aborted.")
+            except RuntimeError as exc:
+                if args.scenario == "cascade":
+                    print("[3/3] Workflow Terminated by Cascading Failure Chain:")
+                    print("      Status:           FAILED")
+                    print("      Root Cause Tool:  fetch_corrupt_config (ValueError: Malformed JSON schema)")
+                    print(f"      Downstream Error: {exc}")
+                else:
+                    raise
     finally:
         # Synchronously flush all trailing telemetry events before exiting
         print("\n⏳ Flushing telemetry buffer to Sentinel Control Tower...")
