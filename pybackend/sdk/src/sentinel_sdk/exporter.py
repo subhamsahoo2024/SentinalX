@@ -22,9 +22,10 @@ class SentinelExporter:
         batch_size: int = 25,
         flush_interval: float = 0.25,
     ) -> None:
-        self.base_url = (
-            base_url or os.getenv("SENTINEL_URL", "http://localhost:8000")
-        ).rstrip("/")
+        raw_url = base_url or os.getenv("SENTINEL_URL", "http://127.0.0.1:8000")
+        if "localhost" in raw_url:
+            raw_url = raw_url.replace("localhost", "127.0.0.1")
+        self.base_url = raw_url.rstrip("/")
         self.api_key = api_key or os.getenv(
             "SENTINEL_API_KEY", "dev-secret-key"
         )
@@ -32,6 +33,7 @@ class SentinelExporter:
         self.flush_interval = flush_interval
 
         self._queue: queue.Queue[CanonicalEventV1] = queue.Queue()
+        self._batch: list[CanonicalEventV1] = []
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._flush_trigger = threading.Event()
@@ -73,7 +75,6 @@ class SentinelExporter:
 
     def _worker_loop(self) -> None:
         """Daemon worker loop draining queue every 0.25s or when 25 events accumulate."""
-        batch: list[CanonicalEventV1] = []
         last_flush = time.monotonic()
 
         while not self._stop_event.is_set():
@@ -82,71 +83,66 @@ class SentinelExporter:
 
             try:
                 event = self._queue.get(timeout=min(0.05, remaining_time))
-                batch.append(event)
-                while len(batch) < self.batch_size:
-                    try:
-                        batch.append(self._queue.get_nowait())
-                    except queue.Empty:
-                        break
+                with self._lock:
+                    self._batch.append(event)
+                    while len(self._batch) < self.batch_size:
+                        try:
+                            self._batch.append(self._queue.get_nowait())
+                        except queue.Empty:
+                            break
             except queue.Empty:
                 pass
 
             now = time.monotonic()
-            should_flush = (
-                len(batch) >= self.batch_size
-                or (batch and (now - last_flush) >= self.flush_interval)
-                or (batch and self._flush_trigger.is_set())
-            )
+            with self._lock:
+                should_flush = (
+                    len(self._batch) >= self.batch_size
+                    or (self._batch and (now - last_flush) >= self.flush_interval)
+                    or (self._batch and self._flush_trigger.is_set())
+                )
 
-            if should_flush:
-                with self._lock:
-                    self._send_batch(batch)
-                    for _ in range(len(batch)):
+                if should_flush and self._batch:
+                    self._send_batch(self._batch)
+                    for _ in range(len(self._batch)):
                         self._queue.task_done()
-                    batch.clear()
+                    self._batch.clear()
                     last_flush = time.monotonic()
                     self._flush_trigger.clear()
 
         # Drain any remaining events on shutdown
-        while not self._queue.empty():
-            try:
-                batch.append(self._queue.get_nowait())
-                if len(batch) >= self.batch_size:
-                    with self._lock:
-                        self._send_batch(batch)
-                        for _ in range(len(batch)):
-                            self._queue.task_done()
-                        batch.clear()
-            except queue.Empty:
-                break
-        if batch:
-            with self._lock:
-                self._send_batch(batch)
-                for _ in range(len(batch)):
-                    self._queue.task_done()
-                batch.clear()
+        with self._lock:
+            while not self._queue.empty():
+                try:
+                    self._batch.append(self._queue.get_nowait())
+                except queue.Empty:
+                    break
+            if self._batch:
+                for i in range(0, len(self._batch), self.batch_size):
+                    chunk = self._batch[i : i + self.batch_size]
+                    self._send_batch(chunk)
+                    for _ in range(len(chunk)):
+                        self._queue.task_done()
+                self._batch.clear()
 
     def flush(self, timeout: float = 5.0) -> None:
         """Synchronously flush all queued events with a timeout."""
-        start = time.monotonic()
-        self._flush_trigger.set()
-
-        while not self._queue.empty():
-            if time.monotonic() - start >= timeout:
-                break
-            time.sleep(0.01)
-
         with self._lock:
-            remaining: list[CanonicalEventV1] = []
+            # Drain any items still in queue into batch
             while not self._queue.empty():
                 try:
-                    remaining.append(self._queue.get_nowait())
-                    self._queue.task_done()
+                    self._batch.append(self._queue.get_nowait())
                 except queue.Empty:
                     break
-            if remaining:
-                for i in range(0, len(remaining), self.batch_size):
-                    self._send_batch(remaining[i : i + self.batch_size])
+
+            # Send all accumulated batch events
+            if self._batch:
+                for i in range(0, len(self._batch), self.batch_size):
+                    chunk = self._batch[i : i + self.batch_size]
+                    self._send_batch(chunk)
+                    for _ in range(len(chunk)):
+                        self._queue.task_done()
+                self._batch.clear()
+                self._flush_trigger.clear()
 
     def shutdown(self, timeout: float = 5.0) -> None:
         """Flush remaining events, stop the background worker, and close HTTP client."""

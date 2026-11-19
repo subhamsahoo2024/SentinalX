@@ -1,12 +1,17 @@
 'use client';
 
-import { useWebSocketStream } from '@/hooks/useWebSocketStream';
+import { useWebSocketStream, type WebSocketConnectionStatus } from '@/hooks/useWebSocketStream';
 import { Radio } from 'lucide-react';
 
-export function LiveConnectionBadge() {
-  const { status } = useWebSocketStream('/ws/fleet');
+interface LiveConnectionBadgeProps {
+  status?: WebSocketConnectionStatus;
+}
 
-  const isConnected = status === 'connected';
+export function LiveConnectionBadge({ status: propStatus }: LiveConnectionBadgeProps) {
+  const { status: fleetStatus } = useWebSocketStream('/ws/fleet');
+  const activeStatus = propStatus ?? fleetStatus;
+
+  const isConnected = activeStatus === 'connected';
 
   return (
     <div
@@ -34,4 +39,3 @@ export function LiveConnectionBadge() {
     </div>
   );
 }
-

@@ -108,6 +108,7 @@ export interface LineageNodeDTO {
   error_class?: string | null;
   error_message?: string | null;
   attributes?: Record<string, unknown>;
+  [key: string]: unknown;
 }
 
 export interface LineageEdgeDTO {

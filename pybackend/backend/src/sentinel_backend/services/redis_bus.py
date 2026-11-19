@@ -77,16 +77,24 @@ async def subscribe_channel(
     pubsub = client.pubsub()
     try:
         await pubsub.subscribe(channel)
-        async for message in pubsub.listen():
-            if message.get("type") == "message":
-                data = message.get("data")
-                if isinstance(data, str):
-                    try:
-                        yield json.loads(data)
-                    except json.JSONDecodeError:
-                        yield {"raw": data}
-                elif isinstance(data, dict):
-                    yield data
+        while True:
+            try:
+                message = await pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=0.5
+                )
+                if message is not None:
+                    data = message.get("data")
+                    if isinstance(data, str):
+                        try:
+                            yield json.loads(data)
+                        except json.JSONDecodeError:
+                            yield {"raw": data}
+                    elif isinstance(data, dict):
+                        yield data
+                else:
+                    await asyncio.sleep(0.02)
+            except asyncio.CancelledError:
+                break
     finally:
         try:
             await pubsub.unsubscribe(channel)

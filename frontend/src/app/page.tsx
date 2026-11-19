@@ -154,7 +154,7 @@ export default function FleetOverviewPage() {
       setRuns(runsData);
       setError(null);
     } catch (err: unknown) {
-      console.error('Failed to load fleet data:', err);
+      console.warn('Failed to load fleet data:', err);
       setError(err instanceof Error ? err.message : 'Failed to load telemetry data');
     } finally {
       setRefreshing(false);
