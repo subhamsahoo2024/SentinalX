@@ -8,6 +8,7 @@ import {
   Coins,
   Shield,
 } from 'lucide-react';
+import { useApprovals } from '@/components/governance/ApprovalContext';
 
 interface NavItem {
   name: string;
@@ -37,6 +38,7 @@ const NAV_ITEMS: NavItem[] = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { pendingCount } = useApprovals();
 
   const isLinkActive = (item: NavItem) => {
     if (item.exact) {
@@ -75,6 +77,7 @@ export function Sidebar() {
           {NAV_ITEMS.map((item) => {
             const active = isLinkActive(item);
             const Icon = item.icon;
+            const hasPendingApprovals = item.href === '/approvals' && pendingCount > 0;
             return (
               <Link
                 key={item.href}
@@ -91,7 +94,12 @@ export function Sidebar() {
                   }`}
                 />
                 <span>{item.name}</span>
-                {active && (
+                {hasPendingApprovals && (
+                  <span className="ml-auto px-2 py-0.5 text-[11px] font-mono font-bold rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 animate-pulse">
+                    {pendingCount}
+                  </span>
+                )}
+                {active && !hasPendingApprovals && (
                   <span className="ml-auto w-1.5 h-1.5 rounded-full bg-cyan-400 shadow-sm shadow-cyan-400" />
                 )}
               </Link>

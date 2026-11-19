@@ -1,5 +1,7 @@
 import {
   AgentResponse,
+  ApprovalDTO,
+  AuditEventDTO,
   FetchRunsParams,
   LineageGraphDTO,
   RunListItemResponse,
@@ -96,6 +98,75 @@ export async function fetchRunEvents(runId: string): Promise<SpanDTO[]> {
   );
   if (!res.ok) {
     throw new Error(`Failed to fetch events for run ${runId}: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
+/**
+ * Fetch approval requests, optionally filtered by status ('PENDING', 'APPROVED', 'REJECTED').
+ */
+export async function fetchApprovals(status?: string): Promise<ApprovalDTO[]> {
+  const url = new URL(`${API_BASE_URL}/api/approvals`);
+  if (status) {
+    url.searchParams.set('status', status);
+  }
+  const res = await fetch(url.toString(), {
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch approvals: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
+/**
+ * Submit an approval decision (APPROVED or REJECTED) with RBAC actor role headers.
+ */
+export async function submitApprovalDecision(
+  approvalId: string,
+  decision: 'APPROVED' | 'REJECTED',
+  comment: string,
+  actorRole: string
+): Promise<ApprovalDTO> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/approvals/${encodeURIComponent(approvalId)}/decision`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Actor-Id': 'lead-operator',
+        'X-Actor-Role': actorRole,
+      },
+      body: JSON.stringify({
+        decision,
+        comment: comment.trim() || null,
+      }),
+    }
+  );
+  if (!res.ok) {
+    let errorDetail = `${res.status} ${res.statusText}`;
+    try {
+      const errJson = await res.json();
+      if (errJson && errJson.detail) {
+        errorDetail = errJson.detail;
+      }
+    } catch {
+      // fallback
+    }
+    throw new Error(errorDetail);
+  }
+  return res.json();
+}
+
+/**
+ * Fetch immutable governance audit log events (ordered descending, limit 100).
+ */
+export async function fetchAuditEvents(): Promise<AuditEventDTO[]> {
+  const res = await fetch(`${API_BASE_URL}/api/audit-events`, {
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch audit events: ${res.status} ${res.statusText}`);
   }
   return res.json();
 }

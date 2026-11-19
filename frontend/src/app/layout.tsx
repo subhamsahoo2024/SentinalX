@@ -4,6 +4,8 @@ import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
 import { Sidebar } from '@/components/Sidebar';
 import { Header } from '@/components/Header';
+import { ApprovalProvider } from '@/components/governance/ApprovalContext';
+import { ApprovalModal } from '@/components/governance/ApprovalModal';
 
 const geistSans = Geist({
   variable: '--font-geist-sans',
@@ -31,19 +33,22 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full dark`}
     >
       <body className="h-full bg-slate-950 text-slate-100 flex overflow-hidden antialiased font-sans">
-        <Suspense fallback={<aside className="w-64 border-r border-slate-800 bg-slate-900/70 shrink-0" />}>
-          <Sidebar />
-        </Suspense>
-        <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
-          <Suspense fallback={<header className="h-16 border-b border-slate-800 bg-slate-900/40 shrink-0" />}>
-            <Header />
+        <ApprovalProvider>
+          <Suspense fallback={<aside className="w-64 border-r border-slate-800 bg-slate-900/70 shrink-0" />}>
+            <Sidebar />
           </Suspense>
-          <main className="flex-1 overflow-y-auto bg-slate-950">
-            <Suspense fallback={<div className="p-8 text-slate-400 font-mono text-sm">Loading...</div>}>
-              {children}
+          <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+            <Suspense fallback={<header className="h-16 border-b border-slate-800 bg-slate-900/40 shrink-0" />}>
+              <Header />
             </Suspense>
-          </main>
-        </div>
+            <main className="flex-1 overflow-y-auto bg-slate-950">
+              <Suspense fallback={<div className="p-8 text-slate-400 font-mono text-sm">Loading...</div>}>
+                {children}
+              </Suspense>
+            </main>
+          </div>
+          <ApprovalModal />
+        </ApprovalProvider>
       </body>
     </html>
   );

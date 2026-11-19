@@ -203,3 +203,32 @@ export interface WebSocketMessage<T = unknown> {
   timestamp: string;
   data: T;
 }
+
+export type ActorRole = 'viewer' | 'operator' | 'approver' | 'admin';
+
+export interface ApprovalDTO {
+  approval_id: string;
+  run_id: string;
+  span_id: string;
+  agent_id: string;
+  tool_name: string;
+  sanitized_args: Record<string, unknown>;
+  risk_level: string;
+  policy_reason: string;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | string;
+  decided_by?: string | null;
+  decided_at?: string | null;
+  comment?: string | null;
+  created_at: string;
+}
+
+export interface AuditEventDTO {
+  audit_id: string;
+  actor_id: string;
+  actor_role: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
