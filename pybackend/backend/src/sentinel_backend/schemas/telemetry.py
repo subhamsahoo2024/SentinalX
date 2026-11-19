@@ -53,6 +53,7 @@ class LineageNodeDTO(BaseModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
     direct_cost_usd: float | None = None
+    rolled_up_cost_usd: float | None = None
     cost_basis: str = "UNKNOWN"
     is_root_cause: bool = False
     error_class: str | None = None

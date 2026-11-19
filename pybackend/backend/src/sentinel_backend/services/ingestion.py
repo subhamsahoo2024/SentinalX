@@ -12,6 +12,7 @@ from sentinel_backend.models.agent import Agent
 from sentinel_backend.models.run import Run
 from sentinel_backend.models.span import Span
 from sentinel_backend.services.anomaly_engine import evaluate_run_anomalies
+from sentinel_backend.services.cost_calculator import calculate_run_costs
 from sentinel_backend.services.redis_bus import publish_event
 
 logger = logging.getLogger(__name__)
@@ -218,7 +219,7 @@ async def ingest_telemetry_batch(
         )
         await db.execute(span_stmt)
 
-    # Recompute run.total_tokens and total_cost_usd for all affected run_ids
+    # Recompute run.total_tokens and calculate costs for all affected run_ids
     for r_id in affected_run_ids:
         sum_query = select(
             func.coalesce(
@@ -228,20 +229,19 @@ async def ingest_telemetry_batch(
                 ),
                 0,
             ),
-            func.sum(Span.direct_cost_usd),
         ).where(Span.run_id == r_id)
 
         tokens_res = await db.execute(sum_query)
-        total_tokens, total_cost = tokens_res.one()
+        total_tokens = tokens_res.scalar_one()
 
         await db.execute(
             update(Run)
             .where(Run.run_id == r_id)
             .values(
                 total_tokens=int(total_tokens),
-                total_cost_usd=total_cost,
             )
         )
+        await calculate_run_costs(db, r_id)
 
     # Evaluate anomalies for affected runs before committing transaction
     for r_id in affected_run_ids:

@@ -44,6 +44,39 @@ async def build_run_lineage(db: AsyncSession, run_id: str) -> LineageGraphDTO:
     edges: list[LineageEdgeDTO] = []
     orphan_span_ids: list[str] = []
 
+    # Build parent -> children map and direct cost map for subtree cost rollup
+    children_map: dict[str, list[str]] = {span.span_id: [] for span in spans}
+    direct_costs: dict[str, float] = {}
+    for span in spans:
+        if span.parent_span_id and span.parent_span_id in children_map:
+            children_map[span.parent_span_id].append(span.span_id)
+        if span.direct_cost_usd is not None:
+            direct_costs[span.span_id] = float(span.direct_cost_usd)
+
+    memo_descendants: dict[str, set[str]] = {}
+
+    def get_descendants(node_id: str, path: set[str]) -> set[str]:
+        if node_id in memo_descendants:
+            return memo_descendants[node_id]
+        descendants: set[str] = set()
+        for child_id in children_map.get(node_id, []):
+            if child_id in path:
+                continue
+            descendants.add(child_id)
+            descendants.update(get_descendants(child_id, path | {child_id}))
+        memo_descendants[node_id] = descendants
+        return descendants
+
+    rolled_up_costs: dict[str, float | None] = {}
+    for span in spans:
+        subtree_ids = {span.span_id} | get_descendants(span.span_id, {span.span_id})
+        subtree_costs = [
+            direct_costs[sid] for sid in subtree_ids if sid in direct_costs
+        ]
+        rolled_up_costs[span.span_id] = (
+            round(sum(subtree_costs), 6) if subtree_costs else None
+        )
+
     for span in spans:
         duration_ms = None
         if span.started_at and span.ended_at:
@@ -85,6 +118,7 @@ async def build_run_lineage(db: AsyncSession, run_id: str) -> LineageGraphDTO:
             input_tokens=span.input_tokens,
             output_tokens=span.output_tokens,
             direct_cost_usd=direct_cost,
+            rolled_up_cost_usd=rolled_up_costs.get(span.span_id),
             cost_basis=cost_basis,
             is_root_cause=is_root_cause,
             error_class=span.error_class,

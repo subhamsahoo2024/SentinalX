@@ -1,4 +1,10 @@
 from sentinel_backend.schemas.alerts import AlertDTO
+from sentinel_backend.schemas.costs import (
+    CostBreakdownItemDTO,
+    CostSummaryDTO,
+    PricingVersionCreate,
+    PricingVersionDTO,
+)
 from sentinel_backend.schemas.governance import (
     ApprovalDecisionRequest,
     ApprovalDTO,
@@ -29,12 +35,16 @@ __all__ = [
     "AuditEventDTO",
     "CanonicalEventV1",
     "CostBasis",
+    "CostBreakdownItemDTO",
     "CostInfo",
+    "CostSummaryDTO",
     "ErrorInfo",
     "LineageEdgeDTO",
     "LineageGraphDTO",
     "LineageNodeDTO",
     "ModelInfo",
+    "PricingVersionCreate",
+    "PricingVersionDTO",
     "RunSummaryDTO",
     "SpanStatus",
     "SpanType",

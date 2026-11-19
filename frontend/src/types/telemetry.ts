@@ -103,6 +103,7 @@ export interface LineageNodeDTO {
   input_tokens?: number | null;
   output_tokens?: number | null;
   direct_cost_usd?: number | null;
+  rolled_up_cost_usd?: number | null;
   cost_basis?: CostBasis | string;
   is_root_cause?: boolean;
   error_class?: string | null;
@@ -244,4 +245,43 @@ export interface AuditEventDTO {
   target_id: string;
   payload: Record<string, unknown>;
   created_at: string;
+}
+
+export interface PricingVersionCreate {
+  provider: string;
+  model_name: string;
+  version_tag: string;
+  input_rate_per_1m: number;
+  output_rate_per_1m: number;
+}
+
+export interface PricingVersionDTO {
+  id: number;
+  provider: string;
+  model_name: string;
+  version_tag: string;
+  input_rate_per_1m: number;
+  output_rate_per_1m: number;
+  effective_from: string;
+}
+
+export interface CostBreakdownItemDTO {
+  key: string;
+  label: string;
+  run_count: number;
+  span_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_cost_usd: number | null;
+  unknown_spans_count: number;
+}
+
+export interface CostSummaryDTO {
+  total_known_cost_usd: number;
+  total_tokens: number;
+  unknown_usage_spans_count: number;
+  by_agent: CostBreakdownItemDTO[];
+  by_team: CostBreakdownItemDTO[];
+  by_model: CostBreakdownItemDTO[];
+  by_run: CostBreakdownItemDTO[];
 }
