@@ -19,6 +19,7 @@ from sentinel_backend.api import (
 from sentinel_backend.db.session import async_session_maker, engine
 from sentinel_backend.services.anomaly_engine import stall_watchdog_loop
 from sentinel_backend.services.cost_calculator import seed_default_pricing
+from sentinel_backend.services.policy_service import seed_default_policy
 from sentinel_backend.services.redis_bus import (
     close_redis,
     get_redis_client,
@@ -31,9 +32,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Initialize Redis connection pool
     get_redis_pool()
 
-    # Seed default pricing versions if empty
-    async with async_session_maker() as session:
-        await seed_default_pricing(session)
+    # Seed default pricing versions and policies if empty
+    async with async_session_maker() as db:
+        await seed_default_pricing(db)
+        await seed_default_policy(db)
 
     watchdog_task = asyncio.create_task(
         stall_watchdog_loop(async_session_maker)

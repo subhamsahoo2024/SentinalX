@@ -241,7 +241,5 @@ sentinal-x/
 
 ---
 
-## License
 
-Apache 2.0. Distributed systems observability and runtime governance for multi-agent AI.
 

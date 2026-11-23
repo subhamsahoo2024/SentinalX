@@ -11,6 +11,11 @@ from sentinel_backend.schemas.governance import (
     ApprovalRequestCreate,
     AuditEventDTO,
 )
+from sentinel_backend.schemas.policies import (
+    PolicyCreate,
+    PolicyDTO,
+    PolicyUpdate,
+)
 from sentinel_backend.schemas.telemetry import (
     CanonicalEventV1,
     CostBasis,
@@ -43,6 +48,9 @@ __all__ = [
     "LineageGraphDTO",
     "LineageNodeDTO",
     "ModelInfo",
+    "PolicyCreate",
+    "PolicyDTO",
+    "PolicyUpdate",
     "PricingVersionCreate",
     "PricingVersionDTO",
     "RunSummaryDTO",
