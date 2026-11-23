@@ -17,6 +17,7 @@ from sentinel_backend.services.governance import (
 )
 from sentinel_backend.services.ingestion import ingest_telemetry_batch
 from sentinel_backend.services.lineage_builder import build_run_lineage, get_run_events
+from sentinel_backend.services.otlp_mapper import parse_otlp_request
 
 __all__ = [
     "build_run_lineage",
@@ -28,6 +29,7 @@ __all__ = [
     "get_cost_summary",
     "get_run_events",
     "ingest_telemetry_batch",
+    "parse_otlp_request",
     "seed_default_pricing",
     "stall_watchdog_loop",
     "wait_for_approval_decision",

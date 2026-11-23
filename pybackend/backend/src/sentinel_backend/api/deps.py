@@ -44,6 +44,37 @@ async def verify_api_key(
     return x_api_key
 
 
+async def verify_ingest_auth(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> str:
+    """Verifies ingest authentication via either X-API-Key or Authorization: Bearer <token>.
+
+    Matches against configured SENTINEL_API_KEY.
+    Raises 401 Unauthorized if missing or invalid.
+    """
+    provided_key: str | None = None
+
+    if x_api_key:
+        provided_key = x_api_key
+    elif authorization:
+        parts = authorization.split(maxsplit=1)
+        if len(parts) == 2 and parts[0].lower() == "bearer":
+            provided_key = parts[1].strip()
+        else:
+            provided_key = authorization.strip()
+
+    if not provided_key or not secrets.compare_digest(
+        provided_key, settings.SENTINEL_API_KEY
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return provided_key
+
+
 async def get_current_actor(
     x_actor_id: str = Header(default="operator-1"),
     x_actor_role: str = Header(default="approver"),
@@ -85,4 +116,5 @@ __all__ = [
     "get_current_actor",
     "require_approver",
     "verify_api_key",
+    "verify_ingest_auth",
 ]
