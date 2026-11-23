@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ApprovalRequestCreate(BaseModel):
@@ -51,7 +51,19 @@ class AuditEventDTO(BaseModel):
     target_type: str
     target_id: str
     payload: dict[str, Any] = Field(default_factory=dict)
+    prev_hash: str = "GENESIS"
+    entry_hash: str = ""
     created_at: datetime
+
+    @field_validator("prev_hash", mode="before")
+    @classmethod
+    def set_prev_hash(cls, v: Any) -> str:
+        return v if (v is not None and v != "") else "GENESIS"
+
+    @field_validator("entry_hash", mode="before")
+    @classmethod
+    def set_entry_hash(cls, v: Any) -> str:
+        return v if v is not None else ""
 
 
 __all__ = [

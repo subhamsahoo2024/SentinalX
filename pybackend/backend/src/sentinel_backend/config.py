@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     REDIS_URL: str
     SENTINEL_API_KEY: str
 
+    # Auth & JWT Configuration
+    JWT_SECRET: str = "sentinel-dev-jwt-secret-change-in-prod-32chars"
+    JWT_EXPIRE_MINUTES: int = 480
+    ALLOW_DEV_HEADERS: bool = True
+
     # Deterministic anomaly detection & watchdog thresholds
     LOOP_THRESHOLD_COUNT: int
     LOOP_WINDOW_SECONDS: int

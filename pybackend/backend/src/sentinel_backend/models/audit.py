@@ -20,7 +20,18 @@ class AuditEvent(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(
         JSONB, default=dict, server_default="{}", nullable=False
     )
+    prev_hash: Mapped[str] = mapped_column(
+        String(64), default="GENESIS", server_default="GENESIS", nullable=False
+    )
+    entry_hash: Mapped[str] = mapped_column(
+        String(64), default="", server_default="", nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("prev_hash", "GENESIS")
+        kwargs.setdefault("entry_hash", "")
+        super().__init__(**kwargs)
 
