@@ -46,6 +46,27 @@ DEFAULT_PRICING_SEEDS = [
         "input_rate_per_1m": Decimal("1.25"),
         "output_rate_per_1m": Decimal("5.00"),
     },
+    {
+        "provider": "groq",
+        "model_name": "llama-3.3-70b-versatile",
+        "version_tag": "2026-11-v1",
+        "input_rate_per_1m": Decimal("0.59"),
+        "output_rate_per_1m": Decimal("0.79"),
+    },
+    {
+        "provider": "google",
+        "model_name": "gemini-2.5-flash",
+        "version_tag": "2026-11-v1",
+        "input_rate_per_1m": Decimal("0.15"),
+        "output_rate_per_1m": Decimal("0.60"),
+    },
+    {
+        "provider": "huggingface",
+        "model_name": "deepseek-ai/DeepSeek-R1:fastest",
+        "version_tag": "2026-11-v1",
+        "input_rate_per_1m": Decimal("0.55"),
+        "output_rate_per_1m": Decimal("2.19"),
+    },
 ]
 
 

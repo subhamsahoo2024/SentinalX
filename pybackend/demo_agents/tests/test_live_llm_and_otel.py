@@ -16,7 +16,10 @@ from sentinel_sdk import get_exporter
 
 
 def test_mock_llm_deterministic_when_live_disabled():
-    with patch.dict(os.environ, {"SENTINEL_LIVE_LLM": "false", "OPENAI_API_KEY": ""}):
+    with patch.dict(
+        os.environ,
+        {"SENTINEL_LIVE_LLM": "false", "OPENAI_API_KEY": "", "LLM_API_KEY": ""},
+    ):
         token = live_llm_context.set(None)
         try:
             assert not is_live_llm_enabled()
@@ -31,7 +34,10 @@ def test_mock_llm_deterministic_when_live_disabled():
 
 
 def test_mock_llm_fallback_when_api_key_missing():
-    with patch.dict(os.environ, {"SENTINEL_LIVE_LLM": "true", "OPENAI_API_KEY": ""}):
+    with patch.dict(
+        os.environ,
+        {"SENTINEL_LIVE_LLM": "true", "OPENAI_API_KEY": "", "LLM_API_KEY": ""},
+    ):
         token = live_llm_context.set(None)
         try:
             assert is_live_llm_enabled()
@@ -66,6 +72,10 @@ def test_mock_llm_live_mode_calls_openai():
             "SENTINEL_LIVE_LLM": "true",
             "OPENAI_API_KEY": "sk-test-live-key",
             "OPENAI_BASE_URL": "http://localhost:11434/v1",
+            "LLM_API_KEY": "",
+            "LLM_BASE_URL": "",
+            "LLM_PROVIDER": "",
+            "LLM_MODEL": "",
         },
     ), patch.dict("sys.modules", {"openai": mock_openai_module}):
         token = live_llm_context.set(None)
@@ -79,8 +89,8 @@ def test_mock_llm_live_mode_calls_openai():
             )
 
             mock_openai_module.OpenAI.assert_called_once_with(
-                api_key="sk-test-live-key",
                 base_url="http://localhost:11434/v1",
+                api_key="sk-test-live-key",
             )
             mock_client_instance.chat.completions.create.assert_called_once_with(
                 model="gpt-4o",
@@ -98,6 +108,115 @@ def test_mock_llm_live_mode_calls_openai():
             end_span = emitted[1]
             assert end_span.usage.input_tokens == 42
             assert end_span.usage.output_tokens == 88
+        finally:
+            live_llm_context.reset(token)
+
+
+def test_mock_llm_live_mode_multi_provider_groq():
+    mock_response = MagicMock()
+    mock_choice = MagicMock()
+    mock_choice.message.content = "Groq Llama inference: Root cause is deadlock."
+    mock_response.choices = [mock_choice]
+    mock_response.model = "llama-3.3-70b-versatile"
+    mock_usage = MagicMock()
+    mock_usage.prompt_tokens = 512
+    mock_usage.completion_tokens = 128
+    mock_response.usage = mock_usage
+
+    mock_client_instance = MagicMock()
+    mock_client_instance.chat.completions.create.return_value = mock_response
+
+    mock_openai_module = MagicMock()
+    mock_openai_module.OpenAI.return_value = mock_client_instance
+
+    with patch.dict(
+        os.environ,
+        {
+            "SENTINEL_LIVE_LLM": "true",
+            "LLM_PROVIDER": "groq",
+            "LLM_BASE_URL": "https://api.groq.com/openai/v1",
+            "LLM_API_KEY": "gsk_test123",
+            "LLM_MODEL": "llama-3.3-70b-versatile",
+        },
+    ), patch.dict("sys.modules", {"openai": mock_openai_module}):
+        token = live_llm_context.set(None)
+        try:
+            emitted = []
+            get_exporter().enqueue = lambda e: emitted.append(e)
+
+            res = mock_llm_completion("Analyze deadlock")
+
+            mock_openai_module.OpenAI.assert_called_once_with(
+                base_url="https://api.groq.com/openai/v1",
+                api_key="gsk_test123",
+            )
+            mock_client_instance.chat.completions.create.assert_called_once_with(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": "Analyze deadlock"}],
+                max_tokens=200,
+            )
+
+            assert res["provider"] == "groq"
+            assert res["model"] == "llama-3.3-70b-versatile"
+
+            # Verify emitted span records actual provider and model
+            assert len(emitted) == 2
+            end_span = emitted[1]
+            assert end_span.model is not None
+            assert end_span.model.provider == "groq"
+            assert end_span.model.name == "llama-3.3-70b-versatile"
+            assert end_span.usage.input_tokens == 512
+            assert end_span.usage.output_tokens == 128
+        finally:
+            live_llm_context.reset(token)
+
+
+def test_mock_llm_live_mode_ollama_missing_usage():
+    mock_response = MagicMock()
+    mock_choice = MagicMock()
+    mock_choice.message.content = "Ollama local inference completion."
+    mock_response.choices = [mock_choice]
+    mock_response.model = "llama3.2"
+    mock_response.usage = None  # Local Ollama may omit usage
+
+    mock_client_instance = MagicMock()
+    mock_client_instance.chat.completions.create.return_value = mock_response
+
+    mock_openai_module = MagicMock()
+    mock_openai_module.OpenAI.return_value = mock_client_instance
+
+    with patch.dict(
+        os.environ,
+        {
+            "SENTINEL_LIVE_LLM": "true",
+            "LLM_PROVIDER": "ollama",
+            "LLM_BASE_URL": "http://localhost:11434/v1",
+            "LLM_API_KEY": "ollama",
+            "LLM_MODEL": "llama3.2",
+        },
+    ), patch.dict("sys.modules", {"openai": mock_openai_module}):
+        token = live_llm_context.set(None)
+        try:
+            emitted = []
+            get_exporter().enqueue = lambda e: emitted.append(e)
+
+            res = mock_llm_completion("Analyze logs")
+
+            mock_openai_module.OpenAI.assert_called_once_with(
+                base_url="http://localhost:11434/v1",
+                api_key="ollama",
+            )
+            assert res["provider"] == "ollama"
+            assert res["model"] == "llama3.2"
+            assert res["usage"] is None
+
+            # Verify emitted span records actual provider, model, and None usage
+            assert len(emitted) == 2
+            end_span = emitted[1]
+            assert end_span.model is not None
+            assert end_span.model.provider == "ollama"
+            assert end_span.model.name == "llama3.2"
+            assert end_span.usage is None
         finally:
             live_llm_context.reset(token)
 

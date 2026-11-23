@@ -32,10 +32,10 @@ async def test_seed_default_pricing_when_empty():
 
     await seed_default_pricing(mock_db)
 
-    # Verifies that db.add_all was called with the 4 default pricing models
+    # Verifies that db.add_all was called with the default pricing models
     assert mock_db.add_all.called
     added_rates = mock_db.add_all.call_args[0][0]
-    assert len(added_rates) == 4
+    assert len(added_rates) == 7
 
     models = {(r.provider, r.model_name): (r.input_rate_per_1m, r.output_rate_per_1m, r.version_tag) for r in added_rates}
     assert ("openai", "gpt-4o") in models
@@ -46,6 +46,13 @@ async def test_seed_default_pricing_when_empty():
     assert models[("anthropic", "claude-3-7-sonnet")] == (Decimal("3.00"), Decimal("15.00"), "2026-11-v1")
     assert ("google", "gemini-2.5-pro") in models
     assert models[("google", "gemini-2.5-pro")] == (Decimal("1.25"), Decimal("5.00"), "2026-11-v1")
+    assert ("groq", "llama-3.3-70b-versatile") in models
+    assert models[("groq", "llama-3.3-70b-versatile")] == (Decimal("0.59"), Decimal("0.79"), "2026-11-v1")
+    assert ("google", "gemini-2.5-flash") in models
+    assert models[("google", "gemini-2.5-flash")] == (Decimal("0.15"), Decimal("0.60"), "2026-11-v1")
+    assert ("huggingface", "deepseek-ai/DeepSeek-R1:fastest") in models
+    assert models[("huggingface", "deepseek-ai/DeepSeek-R1:fastest")] == (Decimal("0.55"), Decimal("2.19"), "2026-11-v1")
+    assert ("ollama", "llama3.2") not in models
 
     assert mock_db.commit.called
 

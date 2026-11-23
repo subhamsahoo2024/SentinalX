@@ -23,17 +23,38 @@ def mock_llm_completion(
     provider: str = "openai",
     latency_ms: int = 250,
 ) -> dict[str, Any]:
-    """Execute LLM inference via live OpenAI API if configured, or fall back to realistic deterministic mock."""
-    # 1. Live LLM execution if enabled and OPENAI_API_KEY is present
+    """Execute LLM inference via live OpenAI-compatible API if configured, or fall back to realistic deterministic mock."""
+    # 1. Live LLM execution if enabled and API key is present
     if is_live_llm_enabled():
-        api_key = os.getenv("OPENAI_API_KEY")
-        if api_key:
+        llm_provider = (
+            os.getenv("LLM_PROVIDER")
+            or os.getenv("OPENAI_PROVIDER")
+            or provider
+            or "openai"
+        )
+        llm_base_url = (
+            os.getenv("LLM_BASE_URL")
+            or os.getenv("OPENAI_BASE_URL")
+            or None
+        )
+        llm_api_key = (
+            os.getenv("LLM_API_KEY")
+            or os.getenv("OPENAI_API_KEY")
+            or None
+        )
+        llm_model = (
+            os.getenv("LLM_MODEL")
+            or os.getenv("OPENAI_MODEL")
+            or model
+            or "gpt-4o"
+        )
+
+        if llm_api_key:
             import openai
 
-            base_url = os.getenv("OPENAI_BASE_URL") or None
-            client = openai.OpenAI(api_key=api_key, base_url=base_url)
+            client = openai.OpenAI(base_url=llm_base_url, api_key=llm_api_key)
             response = client.chat.completions.create(
-                model=model,
+                model=llm_model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=200,
             )
@@ -42,23 +63,33 @@ def mock_llm_completion(
                 if response.choices and response.choices[0].message
                 else ""
             ) or ""
-            resp_model = getattr(response, "model", None) or model
+            resp_model = getattr(response, "model", None) or llm_model
             usage = getattr(response, "usage", None)
-            prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
+            prompt_tokens = (
+                getattr(usage, "prompt_tokens", None)
+                if usage is not None
+                else None
+            )
             completion_tokens = (
-                getattr(usage, "completion_tokens", 0) if usage else 0
+                getattr(usage, "completion_tokens", None)
+                if usage is not None
+                else None
             )
 
-            return {
-                "content": content,
-                "model": resp_model,
-                "provider": provider,
-                "usage": {
+            usage_dict: dict[str, Any] | None = None
+            if prompt_tokens is not None or completion_tokens is not None:
+                usage_dict = {
                     "input_tokens": prompt_tokens,
                     "output_tokens": completion_tokens,
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
-                },
+                }
+
+            return {
+                "content": content,
+                "model": resp_model,
+                "provider": llm_provider,
+                "usage": usage_dict,
             }
 
     # 2. Deterministic mock completion fallback

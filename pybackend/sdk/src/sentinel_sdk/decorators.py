@@ -207,6 +207,31 @@ def _check_runtime_control(run_id: str) -> dict[str, Any]:
     return default_state
 
 
+def _resolve_model_info(
+    base_info: ModelInfo | None,
+    inputs: dict[str, Any] | None = None,
+    result: Any = None,
+) -> ModelInfo | None:
+    prov = base_info.provider if base_info else None
+    name = base_info.name if base_info else None
+
+    if inputs:
+        if inputs.get("provider"):
+            prov = str(inputs["provider"])
+        if inputs.get("model"):
+            name = str(inputs["model"])
+
+    if isinstance(result, dict):
+        if result.get("provider"):
+            prov = str(result["provider"])
+        if result.get("model"):
+            name = str(result["model"])
+
+    if prov is not None or name is not None:
+        return ModelInfo(provider=prov, name=name)
+    return base_info
+
+
 def _handle_runtime_control_gate(
     span_type: SpanType,
     run_id: str,
@@ -326,6 +351,11 @@ def _trace_invocation(
             )
 
             inputs = _extract_inputs(fn, args, kwargs)
+            eff_model_info = (
+                _resolve_model_info(model_info, inputs=inputs)
+                if span_type == SpanType.LLM
+                else model_info
+            )
             _handle_runtime_control_gate(
                 span_type=span_type,
                 run_id=run_id,
@@ -339,7 +369,7 @@ def _trace_invocation(
                 attempt_number=attempt_number,
                 operation_name=operation_name,
                 started_at=started_at,
-                model_info=model_info,
+                model_info=eff_model_info,
                 inputs=inputs,
             )
             start_event = CanonicalEventV1(
@@ -358,7 +388,7 @@ def _trace_invocation(
                 status=SpanStatus.RUNNING,
                 started_at=started_at,
                 ended_at=None,
-                model=model_info,
+                model=eff_model_info,
                 usage=None,
                 attributes={"inputs": inputs},
             )
@@ -385,6 +415,11 @@ def _trace_invocation(
                 result = await fn(*args, **kwargs)
                 ended_at = datetime.now(UTC)
                 token_usage = _extract_token_usage(result)
+                eff_model_info = (
+                    _resolve_model_info(model_info, inputs=inputs, result=result)
+                    if span_type == SpanType.LLM
+                    else model_info
+                )
                 attributes = {
                     "inputs": inputs,
                     "output": redact_payload(result),
@@ -405,7 +440,7 @@ def _trace_invocation(
                     status=SpanStatus.SUCCEEDED,
                     started_at=started_at,
                     ended_at=ended_at,
-                    model=model_info,
+                    model=eff_model_info,
                     usage=token_usage,
                     attributes=attributes,
                 )
@@ -440,7 +475,7 @@ def _trace_invocation(
                     status=fail_status,
                     started_at=started_at,
                     ended_at=ended_at,
-                    model=model_info,
+                    model=eff_model_info,
                     usage=None,
                     error=error_info,
                     attributes=attributes,
@@ -476,6 +511,11 @@ def _trace_invocation(
         )
 
         inputs = _extract_inputs(fn, args, kwargs)
+        eff_model_info = (
+            _resolve_model_info(model_info, inputs=inputs)
+            if span_type == SpanType.LLM
+            else model_info
+        )
         _handle_runtime_control_gate(
             span_type=span_type,
             run_id=run_id,
@@ -489,7 +529,7 @@ def _trace_invocation(
             attempt_number=attempt_number,
             operation_name=operation_name,
             started_at=started_at,
-            model_info=model_info,
+            model_info=eff_model_info,
             inputs=inputs,
         )
         start_event = CanonicalEventV1(
@@ -508,7 +548,7 @@ def _trace_invocation(
             status=SpanStatus.RUNNING,
             started_at=started_at,
             ended_at=None,
-            model=model_info,
+            model=eff_model_info,
             usage=None,
             attributes={"inputs": inputs},
         )
@@ -535,6 +575,11 @@ def _trace_invocation(
             result = fn(*args, **kwargs)
             ended_at = datetime.now(UTC)
             token_usage = _extract_token_usage(result)
+            eff_model_info = (
+                _resolve_model_info(model_info, inputs=inputs, result=result)
+                if span_type == SpanType.LLM
+                else model_info
+            )
             attributes = {
                 "inputs": inputs,
                 "output": redact_payload(result),
@@ -555,7 +600,7 @@ def _trace_invocation(
                 status=SpanStatus.SUCCEEDED,
                 started_at=started_at,
                 ended_at=ended_at,
-                model=model_info,
+                model=eff_model_info,
                 usage=token_usage,
                 attributes=attributes,
             )
@@ -590,7 +635,7 @@ def _trace_invocation(
                 status=fail_status,
                 started_at=started_at,
                 ended_at=ended_at,
-                model=model_info,
+                model=eff_model_info,
                 usage=None,
                 error=error_info,
                 attributes=attributes,
