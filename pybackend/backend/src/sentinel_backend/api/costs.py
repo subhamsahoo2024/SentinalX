@@ -1,4 +1,3 @@
-import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Annotated
@@ -9,13 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sentinel_backend.api.deps import ActorContext, require_approver
 from sentinel_backend.db.session import get_db
-from sentinel_backend.models.audit import AuditEvent
 from sentinel_backend.models.pricing import PricingVersion
 from sentinel_backend.schemas.costs import (
     CostSummaryDTO,
     PricingVersionCreate,
     PricingVersionDTO,
 )
+from sentinel_backend.services.audit import append_audit_event
 from sentinel_backend.services.cost_calculator import get_cost_summary
 
 router = APIRouter(prefix="/api/costs", tags=["costs"])
@@ -66,8 +65,8 @@ async def create_pricing_version(
     db.add(new_version)
     await db.flush()
 
-    audit_event = AuditEvent(
-        audit_id=f"audit_{uuid.uuid4().hex[:12]}",
+    await append_audit_event(
+        db=db,
         actor_id=actor.actor_id,
         actor_role=actor.actor_role,
         action="PRICING_UPDATED",
@@ -80,9 +79,7 @@ async def create_pricing_version(
             "input_rate_per_1m": body.input_rate_per_1m,
             "output_rate_per_1m": body.output_rate_per_1m,
         },
-        created_at=now_utc,
     )
-    db.add(audit_event)
     await db.commit()
     await db.refresh(new_version)
 

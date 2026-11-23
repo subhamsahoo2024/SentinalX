@@ -9,13 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sentinel_backend.api.deps import ActorContext, require_approver
 from sentinel_backend.db.session import get_db
-from sentinel_backend.models.audit import AuditEvent
 from sentinel_backend.models.policy import Policy
 from sentinel_backend.schemas.policies import (
     PolicyCreate,
     PolicyDTO,
     PolicyUpdate,
 )
+from sentinel_backend.services.audit import append_audit_event
 
 router = APIRouter(prefix="/api/policies", tags=["policies"])
 
@@ -59,17 +59,15 @@ async def create_policy(
     )
     db.add(policy)
 
-    audit = AuditEvent(
-        audit_id=f"audit_{uuid.uuid4().hex[:12]}",
+    await append_audit_event(
+        db=db,
         actor_id=actor.actor_id,
         actor_role=actor.actor_role,
         action="POLICY_CREATED",
         target_type="policy",
         target_id=policy_id,
         payload=body.model_dump(mode="json"),
-        created_at=now_utc,
     )
-    db.add(audit)
 
     await db.commit()
     await db.refresh(policy)
@@ -102,17 +100,15 @@ async def update_policy(
 
     policy.updated_at = now_utc
 
-    audit = AuditEvent(
-        audit_id=f"audit_{uuid.uuid4().hex[:12]}",
+    await append_audit_event(
+        db=db,
         actor_id=actor.actor_id,
         actor_role=actor.actor_role,
         action="POLICY_UPDATED",
         target_type="policy",
         target_id=policy_id,
         payload=update_data,
-        created_at=now_utc,
     )
-    db.add(audit)
 
     await db.commit()
     await db.refresh(policy)

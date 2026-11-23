@@ -18,6 +18,7 @@ from sentinel_backend.schemas.governance import (
     ApprovalRequestCreate,
     AuditEventDTO,
 )
+from sentinel_backend.services.audit import verify_audit_chain
 from sentinel_backend.services.governance import (
     create_approval_request,
     decide_approval,
@@ -100,6 +101,16 @@ async def list_audit_events(
     result = await db.execute(stmt)
     events = result.scalars().all()
     return [AuditEventDTO.model_validate(e) for e in events]
+
+
+@router.get(
+    "/api/audit-events/verify",
+)
+async def verify_audit_events_chain(
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> dict[str, Any]:
+    """Verify cryptographic hash-chain integrity of all audit events."""
+    return await verify_audit_chain(db)
 
 
 __all__ = ["router"]

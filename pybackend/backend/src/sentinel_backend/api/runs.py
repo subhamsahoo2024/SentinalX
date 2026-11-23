@@ -1,5 +1,4 @@
 import logging
-import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -16,7 +15,6 @@ from sentinel_backend.api.deps import (
 from sentinel_backend.db.session import get_db
 from sentinel_backend.models.agent import Agent
 from sentinel_backend.models.alert import Alert
-from sentinel_backend.models.audit import AuditEvent
 from sentinel_backend.models.run import Run
 from sentinel_backend.models.span import Span
 from sentinel_backend.schemas.telemetry import (
@@ -25,6 +23,7 @@ from sentinel_backend.schemas.telemetry import (
     SpanDTO,
     SpanStatus,
 )
+from sentinel_backend.services.audit import append_audit_event
 from sentinel_backend.services.lineage_builder import (
     build_run_lineage,
     get_run_events,
@@ -234,8 +233,8 @@ async def cancel_run(
     run_obj.status = "CANCELLED"
     run_obj.ended_at = now_utc
 
-    audit = AuditEvent(
-        audit_id=f"audit_{uuid.uuid4().hex[:12]}",
+    await append_audit_event(
+        db=db,
         actor_id=actor.actor_id,
         actor_role=actor.actor_role,
         action="RUN_CANCELLED",
@@ -245,9 +244,7 @@ async def cancel_run(
             "previous_status": previous_status,
             "cancelled_at": now_utc.isoformat(),
         },
-        created_at=now_utc,
     )
-    db.add(audit)
 
     await db.commit()
     await db.refresh(run_obj)

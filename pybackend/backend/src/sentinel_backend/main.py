@@ -11,6 +11,7 @@ from sentinel_backend.api import (
     agents,
     alerts,
     approvals,
+    auth,
     costs,
     policies,
     runs,
@@ -86,6 +87,7 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 
 # Mount Routers
 app.include_router(telemetry.router)
+app.include_router(auth.router)
 app.include_router(agents.router)
 app.include_router(runs.router)
 app.include_router(approvals.router)

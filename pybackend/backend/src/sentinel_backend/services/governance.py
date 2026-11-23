@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sentinel_backend.api.deps import ActorContext
 from sentinel_backend.models.approval import Approval
-from sentinel_backend.models.audit import AuditEvent
 from sentinel_backend.models.run import Run
 from sentinel_backend.models.span import Span
 from sentinel_backend.schemas.governance import (
@@ -18,6 +17,7 @@ from sentinel_backend.schemas.governance import (
     ApprovalDTO,
     ApprovalRequestCreate,
 )
+from sentinel_backend.services.audit import append_audit_event
 from sentinel_backend.services.redis_bus import publish_event, subscribe_channel
 
 logger = logging.getLogger(__name__)
@@ -218,8 +218,8 @@ async def decide_approval(
             .values(status="RUNNING")
         )
 
-    audit_event = AuditEvent(
-        audit_id=f"audit_{uuid.uuid4().hex[:12]}",
+    await append_audit_event(
+        db=db,
         actor_id=actor.actor_id,
         actor_role=actor.actor_role,
         action=f"APPROVAL_{body.decision}",
@@ -231,9 +231,7 @@ async def decide_approval(
             "tool_name": approval.tool_name,
             "comment": body.comment,
         },
-        created_at=now_utc,
     )
-    db.add(audit_event)
 
     await db.commit()
     await db.refresh(approval)
