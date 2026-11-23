@@ -285,3 +285,45 @@ export interface CostSummaryDTO {
   by_model: CostBreakdownItemDTO[];
   by_run: CostBreakdownItemDTO[];
 }
+
+export interface PolicyDTO {
+  policy_id: string;
+  name: string;
+  team?: string | null;
+  agent_id?: string | null;
+  max_tokens: number;
+  max_cost_usd: number;
+  loop_threshold: number;
+  loop_window_sec: number;
+  auto_block_on_budget: boolean;
+  protected_tools: string[];
+  enabled: boolean;
+  updated_at: string;
+}
+
+export interface PolicyCreateInput {
+  name: string;
+  team?: string | null;
+  agent_id?: string | null;
+  max_tokens?: number;
+  max_cost_usd?: number;
+  loop_threshold?: number;
+  loop_window_sec?: number;
+  auto_block_on_budget?: boolean;
+  protected_tools?: string[];
+  enabled?: boolean;
+}
+
+export interface PolicyUpdateInput {
+  name?: string;
+  team?: string | null;
+  agent_id?: string | null;
+  max_tokens?: number;
+  max_cost_usd?: number;
+  loop_threshold?: number;
+  loop_window_sec?: number;
+  auto_block_on_budget?: boolean;
+  protected_tools?: string[];
+  enabled?: boolean;
+}
+

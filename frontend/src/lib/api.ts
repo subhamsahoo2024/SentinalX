@@ -6,6 +6,9 @@ import {
   CostSummaryDTO,
   FetchRunsParams,
   LineageGraphDTO,
+  PolicyCreateInput,
+  PolicyDTO,
+  PolicyUpdateInput,
   PricingVersionCreate,
   PricingVersionDTO,
   RunListItemResponse,
@@ -288,6 +291,119 @@ export async function createPricingVersion(
   }
   return res.json();
 }
+
+/**
+ * Fetch all governance policies ordered by enabled descending, updated_at descending.
+ */
+export async function fetchPolicies(): Promise<PolicyDTO[]> {
+  const res = await fetch(`${API_BASE_URL}/api/policies`, {
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch policies: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
+/**
+ * Create a new governance policy (requires approver/admin role).
+ */
+export async function createPolicy(
+  payload: PolicyCreateInput,
+  actorRole: string = 'approver'
+): Promise<PolicyDTO> {
+  const res = await fetch(`${API_BASE_URL}/api/policies`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Actor-Id': 'lead-operator',
+      'X-Actor-Role': actorRole,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let errorDetail = `${res.status} ${res.statusText}`;
+    try {
+      const errJson = await res.json();
+      if (errJson && errJson.detail) {
+        errorDetail = errJson.detail;
+      }
+    } catch {
+      // fallback
+    }
+    throw new Error(errorDetail);
+  }
+  return res.json();
+}
+
+/**
+ * Update an existing governance policy (requires approver/admin role).
+ */
+export async function updatePolicy(
+  policyId: string,
+  payload: PolicyUpdateInput,
+  actorRole: string = 'approver'
+): Promise<PolicyDTO> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/policies/${encodeURIComponent(policyId)}`,
+    {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Actor-Id': 'lead-operator',
+        'X-Actor-Role': actorRole,
+      },
+      body: JSON.stringify(payload),
+    }
+  );
+  if (!res.ok) {
+    let errorDetail = `${res.status} ${res.statusText}`;
+    try {
+      const errJson = await res.json();
+      if (errJson && errJson.detail) {
+        errorDetail = errJson.detail;
+      }
+    } catch {
+      // fallback
+    }
+    throw new Error(errorDetail);
+  }
+  return res.json();
+}
+
+/**
+ * Immediately cancel a running or waiting run via operator kill-switch.
+ */
+export async function cancelRun(
+  runId: string,
+  actorRole: string = 'approver'
+): Promise<RunSummaryDTO> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/runs/${encodeURIComponent(runId)}/cancel`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Actor-Id': 'lead-operator',
+        'X-Actor-Role': actorRole,
+      },
+    }
+  );
+  if (!res.ok) {
+    let errorDetail = `${res.status} ${res.statusText}`;
+    try {
+      const errJson = await res.json();
+      if (errJson && errJson.detail) {
+        errorDetail = errJson.detail;
+      }
+    } catch {
+      // fallback
+    }
+    throw new Error(errorDetail);
+  }
+  return res.json();
+}
+
 
 
 

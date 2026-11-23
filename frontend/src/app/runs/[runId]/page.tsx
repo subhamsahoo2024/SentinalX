@@ -12,8 +12,15 @@ import {
   RefreshCw,
   Bot,
   Activity,
+  OctagonX,
 } from 'lucide-react';
-import { fetchAlerts, fetchRunById, fetchRunLineage, acknowledgeAlert } from '@/lib/api';
+import {
+  fetchAlerts,
+  fetchRunById,
+  fetchRunLineage,
+  acknowledgeAlert,
+  cancelRun,
+} from '@/lib/api';
 import { useWebSocketStream } from '@/hooks/useWebSocketStream';
 import { LineageGraph } from '@/components/lineage/LineageGraph';
 import { SpanInspector } from '@/components/lineage/SpanInspector';
@@ -47,6 +54,35 @@ function RunDetailContent({
   const [isReplaying, setIsReplaying] = useState(false);
   const [replayedNodes, setReplayedNodes] = useState<LineageNodeDTO[]>([]);
   const [replayedEdges, setReplayedEdges] = useState<LineageEdgeDTO[]>([]);
+
+  // Emergency Run Kill-Switch state
+  const [showKillModal, setShowKillModal] = useState(false);
+  const [cancellingRun, setCancellingRun] = useState(false);
+  const [killError, setKillError] = useState<string | null>(null);
+
+  const handleKillRun = async () => {
+    try {
+      setCancellingRun(true);
+      setKillError(null);
+      const updated = await cancelRun(runId);
+      setRun((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: 'CANCELLED',
+              ended_at: updated.ended_at,
+            }
+          : updated
+      );
+      setShowKillModal(false);
+      await refreshRunData();
+    } catch (err) {
+      console.error('Failed to cancel run:', err);
+      setKillError(err instanceof Error ? err.message : 'Failed to kill run');
+    } finally {
+      setCancellingRun(false);
+    }
+  };
 
   const handleReplayFrame = useCallback(
     (
@@ -191,6 +227,7 @@ function RunDetailContent({
   const isFailed = status === 'FAILED' || status === 'TIMED_OUT';
   const isAwaiting = status === 'AWAITING_APPROVAL';
   const isStalled = status === 'STALLED';
+  const isCancelled = status === 'CANCELLED';
 
   // Fallback refresh while in-flight to guarantee transition detection
   useEffect(() => {
@@ -207,6 +244,8 @@ function RunDetailContent({
     ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 animate-pulse'
     : isStalled
     ? 'bg-purple-500/20 text-purple-300 border-purple-500/40'
+    : isCancelled
+    ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
     : isFailed
     ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
     : isSucceeded
@@ -308,6 +347,22 @@ function RunDetailContent({
             </>
           )}
 
+          {/* Operator Kill-Switch Button */}
+          {(isRunning || isAwaiting) && (
+            <button
+              onClick={() => {
+                setKillError(null);
+                setShowKillModal(true);
+              }}
+              disabled={cancellingRun}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold bg-rose-600 hover:bg-rose-500 text-white border border-rose-500 shadow-sm shadow-rose-950 transition-colors disabled:opacity-50"
+              title="Emergency Kill-Switch: Halt active run and block subsequent LLM calls"
+            >
+              <OctagonX className="w-3.5 h-3.5 stroke-[2.2]" />
+              <span>Kill Run</span>
+            </button>
+          )}
+
           {/* Replay Execution Toggle Button */}
           {graph && graph.nodes.length > 0 && (
             <button
@@ -393,6 +448,57 @@ function RunDetailContent({
           />
         </div>
       </main>
+
+      {/* Emergency Kill-Switch Confirmation Modal */}
+      {showKillModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-900 border border-rose-500/40 rounded-xl w-full max-w-md shadow-2xl p-5 space-y-4">
+            <div className="flex items-center gap-2.5 text-rose-400">
+              <OctagonX className="w-5 h-5 shrink-0" />
+              <h3 className="text-sm font-bold tracking-tight text-slate-100 font-mono">
+                Emergency Kill-Switch
+              </h3>
+            </div>
+            <p className="text-xs font-mono text-slate-300 leading-relaxed">
+              Are you sure you want to abort run <span className="text-cyan-400 font-bold">{runId}</span>?
+              This will immediately set the cancellation signal in Redis, interrupt active tool steps, and block all further LLM calls.
+            </p>
+            {killError && (
+              <div className="p-2.5 rounded bg-rose-950/60 border border-rose-500/40 text-rose-300 text-xs font-mono">
+                {killError}
+              </div>
+            )}
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowKillModal(false)}
+                disabled={cancellingRun}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-mono transition-colors"
+              >
+                Dismiss
+              </button>
+              <button
+                type="button"
+                onClick={handleKillRun}
+                disabled={cancellingRun}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-mono font-semibold transition-colors disabled:opacity-50 shadow-sm shadow-rose-950"
+              >
+                {cancellingRun ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Aborting...</span>
+                  </>
+                ) : (
+                  <>
+                    <OctagonX className="w-3.5 h-3.5" />
+                    <span>Confirm Kill</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

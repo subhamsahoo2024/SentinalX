@@ -1,6 +1,7 @@
 import asyncio
 import functools
 import inspect
+import logging
 import time
 import traceback
 import uuid
@@ -26,8 +27,10 @@ from sentinel_sdk.context import (
     set_trace_id,
 )
 from sentinel_sdk.exceptions import (
+    BudgetCircuitBreakerError,
     GovernanceRejectedError,
     GovernanceTimeoutError,
+    RunCancelledError,
     SentinelGovernanceError,
 )
 from sentinel_sdk.exporter import get_exporter
@@ -40,6 +43,8 @@ from sentinel_sdk.schema import (
     SpanType,
     TokenUsage,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_inputs(
@@ -140,6 +145,154 @@ def _extract_token_usage(result: Any) -> TokenUsage | None:
     return None
 
 
+def _resolve_sentinel_config() -> tuple[str, str]:
+    exporter = get_exporter()
+    if (
+        exporter
+        and getattr(exporter, "base_url", None)
+        and getattr(exporter, "api_key", None)
+    ):
+        return exporter.base_url, exporter.api_key
+    from sentinel_sdk.config import load_sdk_env
+
+    return load_sdk_env()
+
+
+_CONTROL_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_CONTROL_CACHE_TTL = 0.25
+_http_client: httpx.Client | None = None
+
+
+def _get_http_client() -> httpx.Client:
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        _http_client = httpx.Client(timeout=0.5)
+    return _http_client
+
+
+def _check_runtime_control(run_id: str) -> dict[str, Any]:
+    """Check active runtime control state with 0.25s TTL in-memory cache.
+
+    Fails open on network/HTTP errors or unconfigured URL so telemetry never crashes offline runs.
+    """
+    now = time.monotonic()
+    cached = _CONTROL_CACHE.get(run_id)
+    if cached is not None and (now - cached[0]) < _CONTROL_CACHE_TTL:
+        return cached[1]
+
+    default_state: dict[str, Any] = {"cancelled": False, "blocked_reason": None}
+    try:
+        base_url, api_key = _resolve_sentinel_config()
+        if not base_url or not api_key:
+            return default_state
+
+        if "localhost" in base_url:
+            base_url = base_url.replace("localhost", "127.0.0.1")
+
+        url = f"{base_url.rstrip('/')}/api/runs/{run_id}/control-state"
+        headers = {"X-API-Key": api_key}
+        client = _get_http_client()
+        resp = client.get(url, headers=headers)
+        if resp.status_code == 200:
+            data = resp.json()
+            state = {
+                "cancelled": bool(data.get("cancelled", False)),
+                "blocked_reason": data.get("blocked_reason"),
+            }
+            _CONTROL_CACHE[run_id] = (time.monotonic(), state)
+            return state
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Runtime control check failed: %s", e)
+
+    return default_state
+
+
+def _handle_runtime_control_gate(
+    span_type: SpanType,
+    run_id: str,
+    trace_id: str,
+    span_id: str,
+    parent_span_id: str | None,
+    eff_agent_id: str,
+    eff_agent_name: str | None,
+    eff_team: str,
+    eff_framework: str,
+    attempt_number: int,
+    operation_name: str,
+    started_at: datetime,
+    model_info: ModelInfo | None,
+    inputs: dict[str, Any],
+) -> None:
+    if span_type not in (SpanType.LLM, SpanType.TOOL):
+        return
+
+    ctrl = _check_runtime_control(run_id)
+    if ctrl.get("cancelled"):
+        ended_at = datetime.now(UTC)
+        error_info = ErrorInfo(
+            error_class="RunCancelledError",
+            message="Run aborted by operator kill-switch",
+            stack_summary=None,
+        )
+        cancelled_event = CanonicalEventV1(
+            event_id=f"evt_{uuid.uuid4().hex[:12]}",
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
+            run_id=run_id,
+            agent_id=eff_agent_id,
+            agent_name=eff_agent_name,
+            team=eff_team,
+            framework=eff_framework,
+            attempt_number=attempt_number,
+            span_type=span_type,
+            operation_name=operation_name,
+            status=SpanStatus.CANCELLED,
+            started_at=started_at,
+            ended_at=ended_at,
+            model=model_info,
+            usage=None,
+            error=error_info,
+            attributes={"inputs": inputs},
+        )
+        get_exporter().enqueue(cancelled_event)
+        get_exporter().flush()
+        raise RunCancelledError("Run aborted by operator kill-switch")
+
+    if span_type == SpanType.LLM and ctrl.get("blocked_reason"):
+        blocked_reason = ctrl["blocked_reason"]
+        ended_at = datetime.now(UTC)
+        error_info = ErrorInfo(
+            error_class="BudgetCircuitBreakerError",
+            message=f"Blocked by policy: {blocked_reason}",
+            stack_summary=None,
+        )
+        blocked_event = CanonicalEventV1(
+            event_id=f"evt_{uuid.uuid4().hex[:12]}",
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
+            run_id=run_id,
+            agent_id=eff_agent_id,
+            agent_name=eff_agent_name,
+            team=eff_team,
+            framework=eff_framework,
+            attempt_number=attempt_number,
+            span_type=span_type,
+            operation_name=operation_name,
+            status=SpanStatus.CANCELLED,
+            started_at=started_at,
+            ended_at=ended_at,
+            model=model_info,
+            usage=None,
+            error=error_info,
+            attributes={"inputs": inputs},
+        )
+        get_exporter().enqueue(blocked_event)
+        get_exporter().flush()
+        raise BudgetCircuitBreakerError(f"Blocked by policy: {blocked_reason}")
+
+
 def _trace_invocation(
     fn: Callable[..., Any],
     span_type: SpanType,
@@ -173,6 +326,22 @@ def _trace_invocation(
             )
 
             inputs = _extract_inputs(fn, args, kwargs)
+            _handle_runtime_control_gate(
+                span_type=span_type,
+                run_id=run_id,
+                trace_id=trace_id,
+                span_id=span_id,
+                parent_span_id=parent_span_id,
+                eff_agent_id=eff_agent_id,
+                eff_agent_name=eff_agent_name,
+                eff_team=eff_team,
+                eff_framework=eff_framework,
+                attempt_number=attempt_number,
+                operation_name=operation_name,
+                started_at=started_at,
+                model_info=model_info,
+                inputs=inputs,
+            )
             start_event = CanonicalEventV1(
                 event_id=f"evt_{uuid.uuid4().hex[:12]}",
                 trace_id=trace_id,
@@ -250,6 +419,11 @@ def _trace_invocation(
                     stack_summary=traceback.format_exc(),
                 )
                 attributes = {"inputs": inputs}
+                fail_status = (
+                    SpanStatus.CANCELLED
+                    if isinstance(exc, (RunCancelledError, BudgetCircuitBreakerError))
+                    else SpanStatus.FAILED
+                )
                 fail_event = CanonicalEventV1(
                     event_id=f"evt_{uuid.uuid4().hex[:12]}",
                     trace_id=trace_id,
@@ -263,7 +437,7 @@ def _trace_invocation(
                     attempt_number=attempt_number,
                     span_type=span_type,
                     operation_name=operation_name,
-                    status=SpanStatus.FAILED,
+                    status=fail_status,
                     started_at=started_at,
                     ended_at=ended_at,
                     model=model_info,
@@ -302,6 +476,22 @@ def _trace_invocation(
         )
 
         inputs = _extract_inputs(fn, args, kwargs)
+        _handle_runtime_control_gate(
+            span_type=span_type,
+            run_id=run_id,
+            trace_id=trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
+            eff_agent_id=eff_agent_id,
+            eff_agent_name=eff_agent_name,
+            eff_team=eff_team,
+            eff_framework=eff_framework,
+            attempt_number=attempt_number,
+            operation_name=operation_name,
+            started_at=started_at,
+            model_info=model_info,
+            inputs=inputs,
+        )
         start_event = CanonicalEventV1(
             event_id=f"evt_{uuid.uuid4().hex[:12]}",
             trace_id=trace_id,
@@ -379,6 +569,11 @@ def _trace_invocation(
                 stack_summary=traceback.format_exc(),
             )
             attributes = {"inputs": inputs}
+            fail_status = (
+                SpanStatus.CANCELLED
+                if isinstance(exc, (RunCancelledError, BudgetCircuitBreakerError))
+                else SpanStatus.FAILED
+            )
             fail_event = CanonicalEventV1(
                 event_id=f"evt_{uuid.uuid4().hex[:12]}",
                 trace_id=trace_id,
@@ -392,7 +587,7 @@ def _trace_invocation(
                 attempt_number=attempt_number,
                 span_type=span_type,
                 operation_name=operation_name,
-                status=SpanStatus.FAILED,
+                status=fail_status,
                 started_at=started_at,
                 ended_at=ended_at,
                 model=model_info,
@@ -476,14 +671,6 @@ def trace_tool(
         )
 
     return decorator
-
-
-def _resolve_sentinel_config() -> tuple[str, str]:
-    exporter = get_exporter()
-    if exporter and getattr(exporter, "base_url", None) and getattr(exporter, "api_key", None):
-        return exporter.base_url, exporter.api_key
-    from sentinel_sdk.config import load_sdk_env
-    return load_sdk_env()
 
 
 async def _execute_async_gate(
@@ -1185,6 +1372,7 @@ def gate_tool(
 
 
 __all__ = [
+    "_check_runtime_control",
     "gate_tool",
     "trace_agent",
     "trace_llm",

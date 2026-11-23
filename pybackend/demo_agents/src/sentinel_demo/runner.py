@@ -2,15 +2,17 @@ import argparse
 import os
 import sys
 
-from dotenv import load_dotenv
-
 import sentinel_sdk
+from dotenv import load_dotenv
 from sentinel_sdk import (
+    BudgetCircuitBreakerError,
     GovernanceRejectedError,
     GovernanceTimeoutError,
+    RunCancelledError,
     start_run,
 )
 from sentinel_sdk.config import find_env_file
+
 from sentinel_demo.agents import run_coordinator_agent
 
 # Ensure .env configuration is loaded
@@ -28,8 +30,8 @@ def main() -> None:
         "--scenario",
         type=str,
         default="normal",
-        choices=["normal", "hitl", "loop", "budget", "cascade", "stall"],
-        help="Demo scenario to execute: normal, hitl, loop, budget, cascade, stall (default: normal)",
+        choices=["normal", "hitl", "loop", "budget", "cascade", "stall", "slow_loop"],
+        help="Demo scenario to execute: normal, hitl, loop, budget, cascade, stall, slow_loop (default: normal)",
     )
     parser.add_argument(
         "--ticket-id",
@@ -98,6 +100,10 @@ def main() -> None:
                 print("      • Coordinator Agent        -> Initial RUNNING span emitted and flushed")
                 print("      • Watchdog Monitor         -> 30s silence window [RUN STALLED WATCHDOG]")
                 print(f"      • Live Dashboard URL       -> {args.dashboard_host.rstrip('/')}/runs/{run_id}\n")
+            elif args.scenario == "slow_loop":
+                print("      • Coordinator Agent        -> Triage assessment & delegation")
+                print("      • Slow Loop Agent          -> 15 iterations of DB metrics & LLM with 1.5s sleep [KILL SWITCH DEMO]")
+                print(f"      • Live Dashboard URL       -> {args.dashboard_host.rstrip('/')}/runs/{run_id}\n")
             else:
                 print("      • Coordinator Agent -> Triage assessment & delegation")
                 print("      • Diagnostic Agent  -> Log analysis & DB health inspection")
@@ -123,6 +129,16 @@ def main() -> None:
                 print("      Status:  TIMED_OUT")
                 print(f"      Reason:  {exc}")
                 print("      High-risk operation was aborted.")
+            except RunCancelledError as exc:
+                print("[3/3] Workflow Terminated by Operator Kill-Switch:")
+                print("      Status:  CANCELLED")
+                print(f"      Reason:  {exc}")
+                print("      Run execution was cancelled by operator.")
+            except BudgetCircuitBreakerError as exc:
+                print("[3/3] Workflow Terminated by Budget Circuit Breaker:")
+                print("      Status:  BLOCKED")
+                print(f"      Reason:  {exc}")
+                print("      LLM execution was blocked immediately by policy budget circuit breaker.")
             except RuntimeError as exc:
                 if args.scenario == "cascade":
                     print("[3/3] Workflow Terminated by Cascading Failure Chain:")

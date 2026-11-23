@@ -3,7 +3,13 @@ import time
 from typing import Any
 
 import sentinel_sdk
-from sentinel_sdk import gate_tool, trace_agent, trace_tool
+from sentinel_sdk import (
+    BudgetCircuitBreakerError,
+    RunCancelledError,
+    gate_tool,
+    trace_agent,
+    trace_tool,
+)
 
 from sentinel_demo.mock_llm import mock_llm_completion
 
@@ -437,6 +443,19 @@ def run_coordinator_agent(
             "remediation": remediation,
         }
 
+    # Scenario: slow_loop
+    if scenario == "slow_loop":
+        slow_loop_res = run_slow_loop_agent(ticket_id=ticket_id)
+        return {
+            "ticket_id": ticket_id,
+            "description": description,
+            "scenario": scenario,
+            "status": "RESOLVED",
+            "triage_assessment": triage_llm["content"],
+            "slow_loop": slow_loop_res,
+            "resolved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+
     # Step 2: Delegate to Diagnostic Agent (normal / hitl)
     diagnosis = run_diagnostic_agent(incident=incident)
 
@@ -458,6 +477,29 @@ def run_coordinator_agent(
     }
 
 
+@trace_agent(agent_id="slow-loop-agent", name="Slow Loop Agent", team="it-ops")
+def run_slow_loop_agent(ticket_id: str) -> dict[str, Any]:
+    """Agent that loops 15 times calling check_db_metrics and mock_llm_completion with 1.5s sleep."""
+    for i in range(1, 16):
+        try:
+            print(f"      [slow_loop] Iteration {i}/15: checking db metrics...")
+            check_db_metrics(cluster="cluster-primary")
+            print(f"      [slow_loop] Iteration {i}/15: calling LLM completion...")
+            mock_llm_completion(
+                prompt=f"Assess iteration {i} metrics for incident {ticket_id}",
+                model="gpt-4o",
+            )
+            time.sleep(1.5)
+        except (RunCancelledError, BudgetCircuitBreakerError) as exc:
+            print(f"\n[slow_loop] Execution halted at iteration {i}: {type(exc).__name__} - {exc}")
+            raise
+
+    return {
+        "status": "COMPLETED",
+        "iterations": 15,
+    }
+
+
 __all__ = [
     "check_db_metrics",
     "clear_stale_cache",
@@ -472,5 +514,6 @@ __all__ = [
     "run_diagnostic_agent",
     "run_looping_diagnostic_agent",
     "run_remediation_agent",
+    "run_slow_loop_agent",
     "run_verbose_analysis_agent",
 ]

@@ -7,6 +7,7 @@ import {
   ShieldAlert,
   Coins,
   Shield,
+  Sliders,
 } from 'lucide-react';
 import { useApprovals } from '@/components/governance/ApprovalContext';
 
@@ -33,6 +34,11 @@ const NAV_ITEMS: NavItem[] = [
     name: 'Cost Attribution',
     href: '/costs',
     icon: Coins,
+  },
+  {
+    name: 'Policies',
+    href: '/policies',
+    icon: Sliders,
   },
 ];
 

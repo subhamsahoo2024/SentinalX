@@ -12,8 +12,10 @@ from sentinel_sdk.decorators import (
     trace_tool,
 )
 from sentinel_sdk.exceptions import (
+    BudgetCircuitBreakerError,
     GovernanceRejectedError,
     GovernanceTimeoutError,
+    RunCancelledError,
     SentinelGovernanceError,
 )
 from sentinel_sdk.exporter import (
@@ -36,6 +38,7 @@ from sentinel_sdk.schema import (
 )
 
 __all__ = [
+    "BudgetCircuitBreakerError",
     "CanonicalEventV1",
     "CostBasis",
     "CostInfo",
@@ -43,6 +46,7 @@ __all__ = [
     "GovernanceRejectedError",
     "GovernanceTimeoutError",
     "ModelInfo",
+    "RunCancelledError",
     "RunContext",
     "RunContextManager",
     "SentinelExporter",
