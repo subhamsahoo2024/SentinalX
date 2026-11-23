@@ -74,7 +74,8 @@ async def resolve_effective_policy(
         .order_by(Policy.updated_at.desc())
     )
     res = await db.execute(stmt)
-    policies = list(res.scalars().all())
+    raw_policies = list(res.scalars().all())
+    policies = [p for p in raw_policies if isinstance(p, Policy)]
 
     # Priority 1: agent_id == agent_id
     if agent_id:

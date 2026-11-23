@@ -12,6 +12,7 @@ from sentinel_backend.api import (
     alerts,
     approvals,
     costs,
+    policies,
     runs,
     telemetry,
     ws,
@@ -88,6 +89,7 @@ app.include_router(runs.router)
 app.include_router(approvals.router)
 app.include_router(alerts.router)
 app.include_router(costs.router)
+app.include_router(policies.router)
 app.include_router(ws.router)
 
 

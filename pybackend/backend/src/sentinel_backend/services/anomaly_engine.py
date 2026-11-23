@@ -15,7 +15,8 @@ from sentinel_backend.models.alert import Alert
 from sentinel_backend.models.run import Run
 from sentinel_backend.models.span import Span
 from sentinel_backend.schemas.alerts import AlertDTO
-from sentinel_backend.services.redis_bus import publish_event
+from sentinel_backend.services.policy_service import resolve_effective_policy
+from sentinel_backend.services.redis_bus import get_redis_client, publish_event
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +139,10 @@ async def evaluate_run_anomalies(
         )
         return []
 
+    policy = await resolve_effective_policy(
+        db, team=run.team, agent_id=run.root_agent_id
+    )
+
     stmt = (
         select(Span)
         .where(Span.run_id == run_id)
@@ -171,7 +176,7 @@ async def evaluate_run_anomalies(
             default=datetime.now(UTC),
         )
         window_cutoff = ref_time - timedelta(
-            seconds=settings.LOOP_WINDOW_SECONDS
+            seconds=policy.loop_window_sec
         )
 
         tool_spans = [
@@ -197,7 +202,7 @@ async def evaluate_run_anomalies(
         looping_groups = [
             matching
             for matching in tool_spans_by_sig.values()
-            if len(matching) >= settings.LOOP_THRESHOLD_COUNT
+            if len(matching) >= policy.loop_threshold
         ]
         # Sort by group size descending to prioritize largest loop
         looping_groups.sort(key=len, reverse=True)
@@ -211,12 +216,12 @@ async def evaluate_run_anomalies(
             evidence = {
                 "tool_name": tool_name,
                 "repeat_count": repeat_count,
-                "threshold": settings.LOOP_THRESHOLD_COUNT,
-                "window_seconds": settings.LOOP_WINDOW_SECONDS,
+                "threshold": policy.loop_threshold,
+                "window_seconds": policy.loop_window_sec,
             }
             title = (
                 f"Repeated tool loop detected: '{tool_name}' executed "
-                f"{repeat_count} times in trailing {settings.LOOP_WINDOW_SECONDS}s"
+                f"{repeat_count} times in trailing {policy.loop_window_sec}s"
             )
             loop_alert = await _upsert_alert(
                 db=db,
@@ -231,40 +236,70 @@ async def evaluate_run_anomalies(
             triggered_alerts.append(loop_alert)
 
     # -------------------------------------------------------------------------
-    # Rule 2 — Token Budget Overrun (BUDGET_EXCEEDED)
+    # Rule 2 — Token and Cost Budget Overrun (BUDGET_EXCEEDED)
     # -------------------------------------------------------------------------
-    if run.total_tokens is not None and run.total_tokens > settings.RUN_TOKEN_BUDGET:
+    token_exceeded = (
+        run.total_tokens is not None and run.total_tokens > policy.max_tokens
+    )
+    cost_exceeded = (
+        run.total_cost_usd is not None
+        and float(run.total_cost_usd) > float(policy.max_cost_usd)
+    )
+
+    if token_exceeded or cost_exceeded:
         origin_span_id: str | None = None
         if spans:
-            highest_span = max(
-                spans,
-                key=lambda s: (s.input_tokens or 0)
-                + (s.output_tokens or 0)
-                + (s.cached_tokens or 0),
-            )
+            if cost_exceeded:
+                highest_span = max(
+                    spans,
+                    key=lambda s: float(s.direct_cost_usd or 0.0),
+                )
+            else:
+                highest_span = max(
+                    spans,
+                    key=lambda s: (s.input_tokens or 0)
+                    + (s.output_tokens or 0)
+                    + (s.cached_tokens or 0),
+                )
             origin_span_id = highest_span.span_id
 
         impacted_span_ids = [
             s.span_id
             for s in spans
             if (
-                (s.input_tokens or 0)
-                + (s.output_tokens or 0)
-                + (s.cached_tokens or 0)
+                ((s.input_tokens or 0) + (s.output_tokens or 0) + (s.cached_tokens or 0) > 0)
+                or (s.direct_cost_usd is not None and float(s.direct_cost_usd) > 0.0)
             )
-            > 0
         ]
         if not impacted_span_ids and origin_span_id:
             impacted_span_ids = [origin_span_id]
 
         evidence = {
             "total_tokens": run.total_tokens,
-            "budget_limit": settings.RUN_TOKEN_BUDGET,
+            "budget_limit": policy.max_tokens,
+            "max_tokens": policy.max_tokens,
+            "total_cost_usd": float(run.total_cost_usd) if run.total_cost_usd is not None else None,
+            "max_cost_usd": float(policy.max_cost_usd),
+            "token_exceeded": token_exceeded,
+            "cost_exceeded": cost_exceeded,
+            "auto_block_on_budget": policy.auto_block_on_budget,
         }
-        title = (
-            f"Run token budget exceeded: {run.total_tokens} tokens "
-            f"(budget limit: {settings.RUN_TOKEN_BUDGET})"
-        )
+        if token_exceeded and not cost_exceeded:
+            title = (
+                f"Run token budget exceeded: {run.total_tokens} tokens "
+                f"(budget limit: {policy.max_tokens})"
+            )
+        elif cost_exceeded and not token_exceeded:
+            title = (
+                f"Run cost budget exceeded: ${float(run.total_cost_usd):.4f} USD "
+                f"(budget limit: ${float(policy.max_cost_usd):.4f})"
+            )
+        else:
+            title = (
+                f"Run budget exceeded: {run.total_tokens} tokens (limit: {policy.max_tokens}), "
+                f"${float(run.total_cost_usd):.4f} USD (limit: ${float(policy.max_cost_usd):.4f})"
+            )
+
         budget_alert = await _upsert_alert(
             db=db,
             run_id=run_id,
@@ -276,6 +311,17 @@ async def evaluate_run_anomalies(
             impacted_span_ids=impacted_span_ids,
         )
         triggered_alerts.append(budget_alert)
+
+        if policy.auto_block_on_budget:
+            try:
+                redis_client = get_redis_client()
+                await redis_client.set(
+                    f"run:{run_id}:blocked", "BUDGET_EXCEEDED", ex=3600
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "Failed to set Redis key run:%s:blocked: %s", run_id, e
+                )
 
     # -------------------------------------------------------------------------
     # Rule 3 — Cascading Failure & Root-Cause Attribution (CASCADE_FAILURE)

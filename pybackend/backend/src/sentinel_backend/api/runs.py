@@ -1,4 +1,6 @@
-from datetime import datetime
+import logging
+import uuid
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -6,9 +8,15 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sentinel_backend.api.deps import (
+    ActorContext,
+    require_approver,
+    verify_api_key,
+)
 from sentinel_backend.db.session import get_db
 from sentinel_backend.models.agent import Agent
 from sentinel_backend.models.alert import Alert
+from sentinel_backend.models.audit import AuditEvent
 from sentinel_backend.models.run import Run
 from sentinel_backend.models.span import Span
 from sentinel_backend.schemas.telemetry import (
@@ -21,6 +29,11 @@ from sentinel_backend.services.lineage_builder import (
     build_run_lineage,
     get_run_events,
 )
+from sentinel_backend.services.redis_bus import get_redis_client, publish_event
+
+logger = logging.getLogger(__name__)
+
+TERMINAL_RUN_STATUSES = {"SUCCEEDED", "FAILED", "CANCELLED"}
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 
@@ -39,6 +52,66 @@ class RunListItemResponse(BaseModel):
     cost_status: str
     span_count: int
     alert_count: int
+
+
+class RunControlStateResponse(BaseModel):
+    run_id: str
+    cancelled: bool
+    blocked_reason: str | None = None
+
+
+async def _build_run_summary(db: AsyncSession, run_obj: Run) -> RunSummaryDTO:
+    agent_id = run_obj.root_agent_id or "unknown"
+    agent_name = None
+    framework = "custom"
+    if run_obj.root_agent_id:
+        agent_obj = await db.get(Agent, run_obj.root_agent_id)
+        if agent_obj:
+            agent_name = agent_obj.display_name
+            framework = agent_obj.framework
+
+    spans_query = select(
+        func.count(Span.span_id).label("total_spans"),
+        func.coalesce(
+            func.count(Span.span_id).filter(
+                (Span.error_class.isnot(None))
+                | (Span.status == SpanStatus.FAILED.value)
+            ),
+            0,
+        ).label("error_count"),
+    ).where(Span.run_id == run_obj.run_id)
+
+    spans_res = await db.execute(spans_query)
+    total_spans, error_count = spans_res.one()
+
+    duration_ms = None
+    if run_obj.started_at and run_obj.ended_at:
+        duration_ms = (
+            run_obj.ended_at - run_obj.started_at
+        ).total_seconds() * 1000.0
+
+    status_enum = SpanStatus.RUNNING
+    try:
+        status_enum = SpanStatus(run_obj.status)
+    except ValueError:
+        pass
+
+    return RunSummaryDTO(
+        run_id=run_obj.run_id,
+        trace_id=run_obj.trace_id,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        team=run_obj.team,
+        framework=framework,
+        status=status_enum,
+        started_at=run_obj.started_at,
+        ended_at=run_obj.ended_at,
+        duration_ms=duration_ms,
+        total_spans=int(total_spans),
+        total_tokens=int(run_obj.total_tokens),
+        total_cost_usd=float(run_obj.total_cost_usd or 0.0),
+        error_count=int(error_count),
+    )
 
 
 @router.get("", response_model=list[RunListItemResponse])
@@ -124,61 +197,97 @@ async def get_run_details(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Run '{run_id}' not found",
         )
+    return await _build_run_summary(db, run_obj)
 
-    # Resolve agent metadata if root_agent_id exists
-    agent_id = run_obj.root_agent_id or "unknown"
-    agent_name = None
-    framework = "custom"
-    if run_obj.root_agent_id:
-        agent_obj = await db.get(Agent, run_obj.root_agent_id)
-        if agent_obj:
-            agent_name = agent_obj.display_name
-            framework = agent_obj.framework
 
-    # Query span count and error count
-    spans_query = select(
-        func.count(Span.span_id).label("total_spans"),
-        func.coalesce(
-            func.count(Span.span_id).filter(
-                (Span.error_class.isnot(None))
-                | (Span.status == SpanStatus.FAILED.value)
-            ),
-            0,
-        ).label("error_count"),
-    ).where(Span.run_id == run_id)
+@router.post("/{run_id}/cancel", response_model=RunSummaryDTO)
+async def cancel_run(
+    run_id: str,
+    actor: Annotated[ActorContext, Depends(require_approver)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> RunSummaryDTO:
+    """Cancel an active run with RBAC protection, audit logging, and Redis event broadcast."""
+    run_obj = await db.get(Run, run_id)
+    if not run_obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run '{run_id}' not found",
+        )
 
-    spans_res = await db.execute(spans_query)
-    total_spans, error_count = spans_res.one()
+    if run_obj.status in TERMINAL_RUN_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Run '{run_id}' is already in terminal state '{run_obj.status}'",
+        )
 
-    # Calculate duration
-    duration_ms = None
-    if run_obj.started_at and run_obj.ended_at:
-        duration_ms = (
-            run_obj.ended_at - run_obj.started_at
-        ).total_seconds() * 1000.0
-
-    # Map status safely to SpanStatus enum
-    status_enum = SpanStatus.RUNNING
+    # Set Redis key for runtime cancellation
     try:
-        status_enum = SpanStatus(run_obj.status)
-    except ValueError:
-        pass
+        redis_client = get_redis_client()
+        await redis_client.set(f"run:{run_id}:cancelled", "1", ex=3600)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "Failed to set Redis key run:%s:cancelled: %s", run_id, e
+        )
 
-    return RunSummaryDTO(
-        run_id=run_obj.run_id,
-        trace_id=run_obj.trace_id,
-        agent_id=agent_id,
-        agent_name=agent_name,
-        team=run_obj.team,
-        framework=framework,
-        status=status_enum,
-        started_at=run_obj.started_at,
-        ended_at=run_obj.ended_at,
-        duration_ms=duration_ms,
-        total_spans=int(total_spans),
-        total_tokens=int(run_obj.total_tokens),
-        total_cost_usd=float(run_obj.total_cost_usd or 0.0),
-        error_count=int(error_count),
+    now_utc = datetime.now(UTC)
+    previous_status = run_obj.status
+    run_obj.status = "CANCELLED"
+    run_obj.ended_at = now_utc
+
+    audit = AuditEvent(
+        audit_id=f"audit_{uuid.uuid4().hex[:12]}",
+        actor_id=actor.actor_id,
+        actor_role=actor.actor_role,
+        action="RUN_CANCELLED",
+        target_type="run",
+        target_id=run_id,
+        payload={
+            "previous_status": previous_status,
+            "cancelled_at": now_utc.isoformat(),
+        },
+        created_at=now_utc,
+    )
+    db.add(audit)
+
+    await db.commit()
+    await db.refresh(run_obj)
+
+    summary = await _build_run_summary(db, run_obj)
+    summary_payload = summary.model_dump(mode="json")
+    await publish_event(f"run:{run_id}:stream", "RUN_UPDATED", summary_payload)
+    await publish_event("fleet:stream", "FLEET_UPDATED", summary_payload)
+
+    return summary
+
+
+@router.get(
+    "/{run_id}/control-state",
+    response_model=RunControlStateResponse,
+    dependencies=[Depends(verify_api_key)],
+)
+async def get_run_control_state(
+    run_id: str,
+) -> RunControlStateResponse:
+    """Read active runtime control state (cancellation and budget circuit breaking) from Redis."""
+    cancelled = False
+    blocked_reason = None
+    try:
+        redis_client = get_redis_client()
+        cancelled_val = await redis_client.get(f"run:{run_id}:cancelled")
+        cancelled = bool(cancelled_val)
+        blocked_reason_val = await redis_client.get(f"run:{run_id}:blocked")
+        blocked_reason = (
+            str(blocked_reason_val) if blocked_reason_val else None
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(
+            "Failed to read Redis control state for run %s: %s", run_id, e
+        )
+
+    return RunControlStateResponse(
+        run_id=run_id,
+        cancelled=cancelled,
+        blocked_reason=blocked_reason,
     )
 
 
