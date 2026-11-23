@@ -60,14 +60,23 @@ def main() -> None:
         default=os.getenv("DASHBOARD_URL") or "http://localhost:3000",
         help="Frontend dashboard host URL (default: http://localhost:3000)",
     )
+    parser.add_argument(
+        "--live-llm",
+        action="store_true",
+        help="Enable live LLM completion using OPENAI_API_KEY (default: False)",
+    )
 
     args = parser.parse_args()
+
+    if args.live_llm:
+        os.environ["SENTINEL_LIVE_LLM"] = "true"
 
     print("=" * 70)
     print("🚀 SENTINEL-X: Reproducible Multi-Agent IT Support Triage Demo")
     print(f"Scenario:     {args.scenario.upper()}")
     print(f"Ticket ID:    {args.ticket_id}")
     print(f"Team:         {args.team}")
+    print(f"Live LLM:     {'ENABLED' if args.live_llm else 'DISABLED (Mock)'}")
     print("=" * 70)
 
     run_id: str | None = None

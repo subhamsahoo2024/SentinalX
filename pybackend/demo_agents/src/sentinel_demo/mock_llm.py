@@ -1,6 +1,19 @@
+import os
 import time
+from contextvars import ContextVar
+from typing import Any
 
 from sentinel_sdk import trace_llm
+
+live_llm_context: ContextVar[bool | None] = ContextVar("live_llm_context", default=None)
+
+
+def is_live_llm_enabled() -> bool:
+    """Check whether live LLM mode is enabled via context variable or environment."""
+    ctx_val = live_llm_context.get()
+    if ctx_val is not None:
+        return ctx_val
+    return os.getenv("SENTINEL_LIVE_LLM", "").strip().lower() in ("true", "1", "yes")
 
 
 @trace_llm(provider="openai", model="gpt-4o")
@@ -9,9 +22,46 @@ def mock_llm_completion(
     model: str = "gpt-4o",
     provider: str = "openai",
     latency_ms: int = 250,
-) -> dict:
-    """Simulate realistic LLM inference with deterministic outputs and token counts."""
-    # Simulate network & inference latency
+) -> dict[str, Any]:
+    """Execute LLM inference via live OpenAI API if configured, or fall back to realistic deterministic mock."""
+    # 1. Live LLM execution if enabled and OPENAI_API_KEY is present
+    if is_live_llm_enabled():
+        api_key = os.getenv("OPENAI_API_KEY")
+        if api_key:
+            import openai
+
+            base_url = os.getenv("OPENAI_BASE_URL") or None
+            client = openai.OpenAI(api_key=api_key, base_url=base_url)
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=200,
+            )
+            content = (
+                response.choices[0].message.content
+                if response.choices and response.choices[0].message
+                else ""
+            ) or ""
+            resp_model = getattr(response, "model", None) or model
+            usage = getattr(response, "usage", None)
+            prompt_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
+            completion_tokens = (
+                getattr(usage, "completion_tokens", 0) if usage else 0
+            )
+
+            return {
+                "content": content,
+                "model": resp_model,
+                "provider": provider,
+                "usage": {
+                    "input_tokens": prompt_tokens,
+                    "output_tokens": completion_tokens,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                },
+            }
+
+    # 2. Deterministic mock completion fallback
     if latency_ms > 0:
         time.sleep(latency_ms / 1000.0)
 
@@ -50,9 +100,10 @@ def mock_llm_completion(
         "usage": {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
         },
     }
 
 
-__all__ = ["mock_llm_completion"]
-
+__all__ = ["is_live_llm_enabled", "live_llm_context", "mock_llm_completion"]
