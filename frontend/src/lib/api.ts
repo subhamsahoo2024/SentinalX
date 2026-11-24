@@ -15,10 +15,54 @@ import {
   RunSummaryDTO,
   SpanDTO,
 } from '@/types/telemetry';
+import { getStoredToken } from '@/lib/auth';
 
 const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'
 ).replace(/\/+$/, '');
+
+/**
+ * Base fetch helper that automatically attaches Authorization: Bearer <token>
+ * if a stored JWT session exists, or falls back to X-Actor-Id / X-Actor-Role headers.
+ */
+export async function apiFetch<T>(
+  endpoint: string,
+  options?: RequestInit & { actorRole?: string; actorId?: string }
+): Promise<T> {
+  const url = endpoint.startsWith('http')
+    ? endpoint
+    : `${API_BASE_URL}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
+
+  const token = getStoredToken();
+  const headers = new Headers(options?.headers || {});
+
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  } else if (options?.actorRole) {
+    headers.set('X-Actor-Role', options.actorRole);
+    headers.set('X-Actor-Id', options.actorId || 'lead-operator');
+  }
+
+  const res = await fetch(url, {
+    ...options,
+    headers,
+  });
+
+  if (!res.ok) {
+    let errorDetail = `${res.status} ${res.statusText}`;
+    try {
+      const errJson = await res.json();
+      if (errJson && errJson.detail) {
+        errorDetail = errJson.detail;
+      }
+    } catch {
+      // fallback
+    }
+    throw new Error(errorDetail);
+  }
+
+  return res.json();
+}
 
 /**
  * Fetch all registered agents with dynamic health_status and active_runs_count.
@@ -127,7 +171,7 @@ export async function fetchApprovals(status?: string): Promise<ApprovalDTO[]> {
 }
 
 /**
- * Submit an approval decision (APPROVED or REJECTED) with RBAC actor role headers.
+ * Submit an approval decision (APPROVED or REJECTED) with RBAC actor role headers or JWT token.
  */
 export async function submitApprovalDecision(
   approvalId: string,
@@ -135,47 +179,43 @@ export async function submitApprovalDecision(
   comment: string,
   actorRole: string
 ): Promise<ApprovalDTO> {
-  const res = await fetch(
-    `${API_BASE_URL}/api/approvals/${encodeURIComponent(approvalId)}/decision`,
+  return apiFetch(
+    `/api/approvals/${encodeURIComponent(approvalId)}/decision`,
     {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Actor-Id': 'lead-operator',
-        'X-Actor-Role': actorRole,
       },
+      actorRole,
       body: JSON.stringify({
         decision,
         comment: comment.trim() || null,
       }),
     }
   );
-  if (!res.ok) {
-    let errorDetail = `${res.status} ${res.statusText}`;
-    try {
-      const errJson = await res.json();
-      if (errJson && errJson.detail) {
-        errorDetail = errJson.detail;
-      }
-    } catch {
-      // fallback
-    }
-    throw new Error(errorDetail);
-  }
-  return res.json();
 }
 
 /**
  * Fetch immutable governance audit log events (ordered descending, limit 100).
  */
 export async function fetchAuditEvents(): Promise<AuditEventDTO[]> {
-  const res = await fetch(`${API_BASE_URL}/api/audit-events`, {
+  return apiFetch('/api/audit-events', {
     cache: 'no-store',
   });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch audit events: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+}
+
+/**
+ * Verify cryptographic SHA-256 hash-chain integrity of all recorded audit events.
+ */
+export async function verifyAuditChain(): Promise<{
+  valid: boolean;
+  total_events: number;
+  latest_hash: string;
+  broken_at_audit_id: string | null;
+}> {
+  return apiFetch('/api/audit-events/verify', {
+    cache: 'no-store',
+  });
 }
 
 /**
@@ -268,41 +308,23 @@ export async function createPricingVersion(
   payload: PricingVersionCreate,
   actorRole: string = 'approver'
 ): Promise<PricingVersionDTO> {
-  const res = await fetch(`${API_BASE_URL}/api/costs/pricing`, {
+  return apiFetch('/api/costs/pricing', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Actor-Id': 'lead-operator',
-      'X-Actor-Role': actorRole,
     },
+    actorRole,
     body: JSON.stringify(payload),
   });
-  if (!res.ok) {
-    let errorDetail = `${res.status} ${res.statusText}`;
-    try {
-      const errJson = await res.json();
-      if (errJson && errJson.detail) {
-        errorDetail = errJson.detail;
-      }
-    } catch {
-      // fallback
-    }
-    throw new Error(errorDetail);
-  }
-  return res.json();
 }
 
 /**
  * Fetch all governance policies ordered by enabled descending, updated_at descending.
  */
 export async function fetchPolicies(): Promise<PolicyDTO[]> {
-  const res = await fetch(`${API_BASE_URL}/api/policies`, {
+  return apiFetch('/api/policies', {
     cache: 'no-store',
   });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch policies: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
 }
 
 /**
@@ -312,28 +334,14 @@ export async function createPolicy(
   payload: PolicyCreateInput,
   actorRole: string = 'approver'
 ): Promise<PolicyDTO> {
-  const res = await fetch(`${API_BASE_URL}/api/policies`, {
+  return apiFetch('/api/policies', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-Actor-Id': 'lead-operator',
-      'X-Actor-Role': actorRole,
     },
+    actorRole,
     body: JSON.stringify(payload),
   });
-  if (!res.ok) {
-    let errorDetail = `${res.status} ${res.statusText}`;
-    try {
-      const errJson = await res.json();
-      if (errJson && errJson.detail) {
-        errorDetail = errJson.detail;
-      }
-    } catch {
-      // fallback
-    }
-    throw new Error(errorDetail);
-  }
-  return res.json();
 }
 
 /**
@@ -344,31 +352,14 @@ export async function updatePolicy(
   payload: PolicyUpdateInput,
   actorRole: string = 'approver'
 ): Promise<PolicyDTO> {
-  const res = await fetch(
-    `${API_BASE_URL}/api/policies/${encodeURIComponent(policyId)}`,
-    {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Actor-Id': 'lead-operator',
-        'X-Actor-Role': actorRole,
-      },
-      body: JSON.stringify(payload),
-    }
-  );
-  if (!res.ok) {
-    let errorDetail = `${res.status} ${res.statusText}`;
-    try {
-      const errJson = await res.json();
-      if (errJson && errJson.detail) {
-        errorDetail = errJson.detail;
-      }
-    } catch {
-      // fallback
-    }
-    throw new Error(errorDetail);
-  }
-  return res.json();
+  return apiFetch(`/api/policies/${encodeURIComponent(policyId)}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    actorRole,
+    body: JSON.stringify(payload),
+  });
 }
 
 /**
@@ -378,30 +369,13 @@ export async function cancelRun(
   runId: string,
   actorRole: string = 'approver'
 ): Promise<RunSummaryDTO> {
-  const res = await fetch(
-    `${API_BASE_URL}/api/runs/${encodeURIComponent(runId)}/cancel`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Actor-Id': 'lead-operator',
-        'X-Actor-Role': actorRole,
-      },
-    }
-  );
-  if (!res.ok) {
-    let errorDetail = `${res.status} ${res.statusText}`;
-    try {
-      const errJson = await res.json();
-      if (errJson && errJson.detail) {
-        errorDetail = errJson.detail;
-      }
-    } catch {
-      // fallback
-    }
-    throw new Error(errorDetail);
-  }
-  return res.json();
+  return apiFetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    actorRole,
+  });
 }
 
 

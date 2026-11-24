@@ -16,15 +16,31 @@ import {
 } from 'lucide-react';
 import { useApprovals } from './ApprovalContext';
 import { ActorRole } from '@/types/telemetry';
+import { getStoredUser, SentinelUser } from '@/lib/auth';
+import { getRoleBadgeClass } from './UserSessionMenu';
 
 export function ApprovalModal() {
   const { pendingApprovals, decideApproval } = useApprovals();
   const [currentIndex, setCurrentIndex] = useState<number>(0);
+  const [currentUser, setCurrentUser] = useState<SentinelUser | null>(null);
   const [selectedRole, setSelectedRole] = useState<ActorRole>('approver');
   const [comment, setComment] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isMinimized, setIsMinimized] = useState<boolean>(false);
+
+  // Sync stored user session
+  React.useEffect(() => {
+    const syncUser = () => setCurrentUser(getStoredUser());
+    syncUser();
+
+    window.addEventListener('sentinel-auth-changed', syncUser);
+    window.addEventListener('storage', syncUser);
+    return () => {
+      window.removeEventListener('sentinel-auth-changed', syncUser);
+      window.removeEventListener('storage', syncUser);
+    };
+  }, []);
 
   // If no pending approvals, render nothing
   if (!pendingApprovals || pendingApprovals.length === 0) {
@@ -44,7 +60,7 @@ export function ApprovalModal() {
         currentApproval.approval_id,
         decision,
         comment,
-        selectedRole
+        currentUser ? (currentUser.role as ActorRole) : selectedRole
       );
       setComment('');
       // Adjust index if we were on the last item
@@ -238,26 +254,39 @@ export function ApprovalModal() {
             </div>
           </div>
 
-          {/* RBAC Role Selector & Reviewer Comment */}
+          {/* RBAC Role Selector / Authenticated Actor & Reviewer Comment */}
           <div className="pt-2 border-t border-slate-800/80 space-y-3">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
               <div>
                 <label className="block text-[11px] font-mono uppercase tracking-wider text-slate-400 mb-1">
-                  Actor Role (RBAC):
+                  {currentUser ? 'Authenticated Actor:' : 'Actor Role (RBAC):'}
                 </label>
-                <select
-                  value={selectedRole}
-                  onChange={(e) => {
-                    setSelectedRole(e.target.value as ActorRole);
-                    setErrorMessage(null);
-                  }}
-                  className="w-full bg-slate-950 border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-cyan-500 transition-colors"
-                >
-                  <option value="approver">approver (Authorized)</option>
-                  <option value="admin">admin (Authorized)</option>
-                  <option value="operator">operator (403 Forbidden)</option>
-                  <option value="viewer">viewer (403 Forbidden)</option>
-                </select>
+                {currentUser ? (
+                  <div className="w-full bg-slate-950 border border-slate-700/80 rounded-lg px-2.5 py-1.5 flex items-center justify-between text-xs font-mono">
+                    <span className="text-slate-200 truncate">{currentUser.email}</span>
+                    <span
+                      className={`px-1.5 py-0.2 rounded text-[10px] font-bold uppercase border ${getRoleBadgeClass(
+                        currentUser.role
+                      )}`}
+                    >
+                      {currentUser.role}
+                    </span>
+                  </div>
+                ) : (
+                  <select
+                    value={selectedRole}
+                    onChange={(e) => {
+                      setSelectedRole(e.target.value as ActorRole);
+                      setErrorMessage(null);
+                    }}
+                    className="w-full bg-slate-950 border border-slate-700/80 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 font-mono focus:outline-none focus:border-cyan-500 transition-colors"
+                  >
+                    <option value="approver">approver (Authorized)</option>
+                    <option value="admin">admin (Authorized)</option>
+                    <option value="operator">operator (403 Forbidden)</option>
+                    <option value="viewer">viewer (403 Forbidden)</option>
+                  </select>
+                )}
               </div>
 
               <div>

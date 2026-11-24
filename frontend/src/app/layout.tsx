@@ -38,7 +38,7 @@ export default function RootLayout({
             <Sidebar />
           </Suspense>
           <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
-            <Suspense fallback={<header className="h-16 border-b border-slate-800 bg-slate-900/40 shrink-0" />}>
+            <Suspense fallback={<header className="relative z-40 h-16 border-b border-slate-800 bg-slate-900/40 shrink-0" />}>
               <Header />
             </Suspense>
             <main className="flex-1 overflow-y-auto bg-slate-950">

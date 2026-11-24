@@ -28,6 +28,7 @@ import {
   fetchApprovals,
   fetchAuditEvents,
   submitApprovalDecision,
+  verifyAuditChain,
 } from '@/lib/api';
 import { useApprovals } from '@/components/governance/ApprovalContext';
 import { useWebSocketStream } from '@/hooks/useWebSocketStream';
@@ -394,6 +395,12 @@ export default function ApprovalsPage() {
   const [activeTab, setActiveTab] = useState<FilterTab>('ALL');
   const [approvals, setApprovals] = useState<ApprovalDTO[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEventDTO[]>([]);
+  const [chainVerification, setChainVerification] = useState<{
+    valid: boolean;
+    total_events: number;
+    latest_hash: string;
+    broken_at_audit_id: string | null;
+  } | null>(null);
   const [isLoadingApprovals, setIsLoadingApprovals] = useState<boolean>(true);
   const [isLoadingAudit, setIsLoadingAudit] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
@@ -402,12 +409,17 @@ export default function ApprovalsPage() {
   const loadData = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      const [apprList, auditList] = await Promise.all([
+      const [apprList, auditList, verifyData] = await Promise.all([
         fetchApprovals(activeTab === 'ALL' ? undefined : activeTab),
         fetchAuditEvents(),
+        verifyAuditChain().catch((err) => {
+          console.warn('Failed to verify audit chain:', err);
+          return null;
+        }),
       ]);
       setApprovals(apprList);
       setAuditEvents(auditList);
+      if (verifyData) setChainVerification(verifyData);
     } catch (err) {
       console.error('Failed to load governance data:', err);
     } finally {
@@ -423,11 +435,16 @@ export default function ApprovalsPage() {
     Promise.all([
       fetchApprovals(activeTab === 'ALL' ? undefined : activeTab),
       fetchAuditEvents(),
+      verifyAuditChain().catch((err) => {
+        console.warn('Failed to verify audit chain:', err);
+        return null;
+      }),
     ])
-      .then(([apprList, auditList]) => {
+      .then(([apprList, auditList, verifyData]) => {
         if (isMounted) {
           setApprovals(apprList);
           setAuditEvents(auditList);
+          if (verifyData) setChainVerification(verifyData);
           setIsLoadingApprovals(false);
           setIsLoadingAudit(false);
         }
@@ -641,6 +658,49 @@ export default function ApprovalsPage() {
           </div>
         </div>
 
+        {/* Cryptographic SHA-256 Hash Chain Integrity Banner */}
+        {chainVerification && (
+          <div
+            className={`p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono shadow-sm transition-all ${
+              chainVerification.valid
+                ? 'bg-emerald-950/25 border-emerald-500/40 text-emerald-200'
+                : 'bg-rose-950/40 border-rose-500/60 text-rose-200 shadow-rose-950/40'
+            }`}
+          >
+            <div className="flex items-center gap-2.5">
+              {chainVerification.valid ? (
+                <ShieldCheck className="w-5 h-5 text-emerald-400 shrink-0" />
+              ) : (
+                <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0 animate-bounce" />
+              )}
+              <div>
+                <div className="font-semibold text-slate-100 flex items-center gap-2">
+                  {chainVerification.valid
+                    ? `SHA-256 Audit Chain Verified (${chainVerification.total_events} records)`
+                    : `Chain Integrity Breach at ${chainVerification.broken_at_audit_id}`}
+                  {chainVerification.valid && (
+                    <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                      TAMPER-PROOF
+                    </span>
+                  )}
+                </div>
+                <div className="text-[11px] text-slate-400 mt-0.5 font-sans">
+                  Cryptographic SHA-256 sequence linking guarantees append-only immutability and non-repudiation
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5 bg-slate-950/60 border border-slate-800/80 rounded-lg px-2.5 py-1 text-[11px] font-mono text-slate-300 self-start sm:self-auto shrink-0">
+              <span className="text-slate-500">Latest Hash:</span>
+              <code className="text-cyan-400 font-bold">
+                {chainVerification.latest_hash
+                  ? `${chainVerification.latest_hash.slice(0, 16)}...`
+                  : 'GENESIS'}
+              </code>
+            </div>
+          </div>
+        )}
+
         {isLoadingAudit ? (
           <div className="p-8 text-center text-slate-400 font-mono text-sm bg-slate-900/40 rounded-xl border border-slate-800">
             Loading audit events...
@@ -660,6 +720,7 @@ export default function ApprovalsPage() {
                     <th className="py-3 px-4">Actor ID</th>
                     <th className="py-3 px-4">Role</th>
                     <th className="py-3 px-4">Target ID</th>
+                    <th className="py-3 px-4">Entry Hash</th>
                     <th className="py-3 px-4 text-right">Payload Details</th>
                   </tr>
                 </thead>
@@ -710,6 +771,19 @@ export default function ApprovalsPage() {
                             {evt.target_type}:{evt.target_id}
                           </td>
 
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            {evt.entry_hash ? (
+                              <span
+                                className="px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-cyan-300 font-mono text-[11px]"
+                                title={evt.entry_hash}
+                              >
+                                {evt.entry_hash.slice(0, 10)}...
+                              </span>
+                            ) : (
+                              <span className="text-slate-600">—</span>
+                            )}
+                          </td>
+
                           <td className="py-3 px-4 text-right whitespace-nowrap">
                             <button
                               type="button"
@@ -732,7 +806,7 @@ export default function ApprovalsPage() {
 
                         {isExpanded && (
                           <tr className="bg-slate-950/80">
-                            <td colSpan={6} className="p-4 border-t border-slate-800/80">
+                            <td colSpan={7} className="p-4 border-t border-slate-800/80">
                               <div className="space-y-2">
                                 <div className="text-[11px] text-slate-400 font-sans flex items-center justify-between">
                                   <span>

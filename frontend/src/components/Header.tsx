@@ -2,6 +2,7 @@
 
 import { usePathname } from 'next/navigation';
 import { LiveConnectionBadge } from './LiveConnectionBadge';
+import { UserSessionMenu } from './governance/UserSessionMenu';
 
 export function Header() {
   const pathname = usePathname();
@@ -15,7 +16,7 @@ export function Header() {
   };
 
   return (
-    <header className="h-16 border-b border-slate-800 bg-slate-900/40 backdrop-blur-md px-6 flex items-center justify-between shrink-0">
+    <header className="relative z-40 h-16 border-b border-slate-800 bg-slate-900/40 backdrop-blur-md px-6 flex items-center justify-between shrink-0">
       <div className="flex items-center gap-3">
         <h1 className="text-base font-semibold text-slate-100 tracking-tight">
           {getPageTitle(pathname)}
@@ -25,9 +26,12 @@ export function Header() {
         </span>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
         {/* Live WebSocket connection indicator */}
         <LiveConnectionBadge />
+
+        {/* User Session & Role Switcher Menu */}
+        <UserSessionMenu />
       </div>
     </header>
   );

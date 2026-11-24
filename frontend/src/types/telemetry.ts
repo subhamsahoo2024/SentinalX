@@ -244,6 +244,8 @@ export interface AuditEventDTO {
   target_type: string;
   target_id: string;
   payload: Record<string, unknown>;
+  prev_hash?: string;
+  entry_hash?: string;
   created_at: string;
 }
 

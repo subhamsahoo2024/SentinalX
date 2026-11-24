@@ -17,6 +17,7 @@ help:
 	@echo "  make demo-budget  - Run Token Budget Overrun Anomaly demo"
 	@echo "  make demo-cascade - Run Cascading Failure Chain demo"
 	@echo "  make demo-stall   - Run Stalled Run Watchdog demo"
+	@echo "  make demo-slow_loop - Run Slow Loop Anomaly demo"
 
 docker-up:
 	docker compose up --build
@@ -62,3 +63,7 @@ demo-cascade:
 
 demo-stall:
 	cd pybackend && uv run --package sentinel-demo python -m sentinel_demo.runner --scenario stall
+
+demo-slow_loop:
+	cd pybackend && uv run --package sentinel-demo python -m sentinel_demo.runner --scenario slow_loop
+

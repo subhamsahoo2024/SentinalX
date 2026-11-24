@@ -5,8 +5,6 @@ import { format, formatDistanceToNow } from 'date-fns';
 import {
   Sliders,
   Shield,
-  ShieldAlert,
-  ShieldCheck,
   Plus,
   RefreshCw,
   AlertCircle,
@@ -19,7 +17,6 @@ import {
   Coins,
   Repeat,
   Zap,
-  Tag,
   Lock,
 } from 'lucide-react';
 import { createPolicy, fetchPolicies, updatePolicy } from '@/lib/api';
@@ -110,8 +107,26 @@ export default function PoliciesPage() {
   }, []);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    let isMounted = true;
+    fetchPolicies()
+      .then((data) => {
+        if (isMounted) {
+          setPolicies(data);
+          setError(null);
+          setLoading(false);
+        }
+      })
+      .catch((err) => {
+        if (isMounted) {
+          console.error('Failed to load policies:', err);
+          setError(err instanceof Error ? err.message : 'Failed to load governance policies');
+          setLoading(false);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const handleToggleEnabled = async (policy: PolicyDTO) => {
     try {
@@ -365,9 +380,17 @@ export default function PoliciesPage() {
           </div>
         </div>
 
-        {/* Quick Filter Buttons */}
-        <div className="flex items-center gap-1.5 self-start md:self-auto shrink-0">
-          {(['ALL', 'GLOBAL', 'TEAM', 'AGENT'] as const).map((filter) => (
+        {/* Search input and Quick Filter Buttons */}
+        <div className="flex items-center gap-2 self-start md:self-auto shrink-0 flex-wrap">
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search policies..."
+            className="bg-slate-950 border border-slate-700/80 rounded-lg px-2.5 py-1 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500 font-mono"
+          />
+          <div className="flex items-center gap-1.5">
+            {(['ALL', 'GLOBAL', 'TEAM', 'AGENT'] as const).map((filter) => (
             <button
               key={filter}
               onClick={() => setScopeFilter(filter)}
@@ -381,6 +404,7 @@ export default function PoliciesPage() {
               {filter}
             </button>
           ))}
+          </div>
         </div>
       </div>
 
@@ -400,7 +424,6 @@ export default function PoliciesPage() {
           {filteredPolicies.map((policy) => {
             const isAgentScoped = Boolean(policy.agent_id);
             const isTeamScoped = Boolean(policy.team) && !policy.agent_id;
-            const isGlobal = !policy.team && !policy.agent_id;
 
             return (
               <div
