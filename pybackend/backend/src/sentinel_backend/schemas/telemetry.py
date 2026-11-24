@@ -109,7 +109,25 @@ class SpanDTO(BaseModel):
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 
+class AgentSloDTO(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_id: str
+    display_name: str
+    framework: str
+    team: str
+    total_invocations: int
+    succeeded_count: int
+    failed_count: int
+    success_rate_pct: float
+    p50_duration_ms: float | None = None
+    p95_duration_ms: float | None = None
+    avg_tokens_per_call: float
+    anomaly_count: int
+
+
 __all__ = [
+    "AgentSloDTO",
     "CanonicalEventV1",
     "CostBasis",
     "CostInfo",

@@ -13,6 +13,8 @@ import {
   Bot,
   Activity,
   OctagonX,
+  Network,
+  GanttChart,
 } from 'lucide-react';
 import {
   fetchAlerts,
@@ -23,6 +25,7 @@ import {
 } from '@/lib/api';
 import { useWebSocketStream } from '@/hooks/useWebSocketStream';
 import { LineageGraph } from '@/components/lineage/LineageGraph';
+import { WaterfallView } from '@/components/lineage/WaterfallView';
 import { SpanInspector } from '@/components/lineage/SpanInspector';
 import { RunAlertsBanner } from '@/components/lineage/RunAlertsBanner';
 import { LiveConnectionBadge } from '@/components/LiveConnectionBadge';
@@ -59,6 +62,7 @@ function RunDetailContent({
   const [showKillModal, setShowKillModal] = useState(false);
   const [cancellingRun, setCancellingRun] = useState(false);
   const [killError, setKillError] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<'dag' | 'waterfall'>('dag');
 
   const handleKillRun = async () => {
     try {
@@ -273,25 +277,26 @@ function RunDetailContent({
 
   return (
     <div className="flex flex-col h-full w-full overflow-hidden bg-slate-950">
-      {/* Compact Top Navigation Bar */}
-      <header className="h-14 px-4 sm:px-6 border-b border-slate-800 bg-slate-900/90 backdrop-blur-md flex items-center justify-between gap-4 shrink-0 z-20">
-        {/* Left: Back Link & Identity */}
-        <div className="flex items-center gap-3 min-w-0">
-          <Link
-            href="/"
-            className="p-1.5 rounded-lg bg-slate-800 border border-slate-700/60 text-slate-400 hover:text-slate-100 hover:bg-slate-700 transition-colors"
-            title="Back to Fleet Overview"
-          >
-            <ArrowLeft className="w-4 h-4" />
-          </Link>
+      {/* Two-Line Navigation & Telemetry Toolbar */}
+      <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur-md flex flex-col shrink-0 z-20">
+        {/* Line 1: Identity, Status, Mode Switcher, Kill Button, and Live Connection */}
+        <div className="h-12 px-4 sm:px-6 flex items-center justify-between gap-3 border-b border-slate-800/60">
+          {/* Left: Back Link, Run ID & Status */}
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+            <Link
+              href="/"
+              className="p-1.5 rounded-lg bg-slate-800 border border-slate-700/60 text-slate-400 hover:text-slate-100 hover:bg-slate-700 transition-colors shrink-0"
+              title="Back to Fleet Overview"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </Link>
 
-          <div className="flex items-center gap-2 min-w-0">
             <button
               onClick={copyRunId}
               className="flex items-center gap-1.5 text-sm font-bold text-slate-100 font-mono hover:text-cyan-400 transition-colors truncate"
               title="Click to copy run ID"
             >
-              <span>Run: {runId}</span>
+              <span className="truncate">Run: {runId}</span>
               {copiedRunId ? (
                 <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
               ) : (
@@ -310,107 +315,153 @@ function RunDetailContent({
               </span>
             )}
           </div>
+
+          {/* Right: Mode Switcher, Kill Button, Live WS Badge */}
+          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+            {/* Graph Mode Switching Button */}
+            {graph && graph.nodes.length > 0 && (
+              <div className="flex items-center rounded-lg bg-slate-800/80 p-0.5 border border-slate-700/60 text-xs font-mono">
+                <button
+                  onClick={() => setViewMode('dag')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-md transition-colors flex items-center gap-1.5',
+                    viewMode === 'dag'
+                      ? 'bg-slate-700 text-cyan-300 font-semibold shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  )}
+                  title="Lineage DAG View"
+                >
+                  <Network className="w-3.5 h-3.5" />
+                  <span>Lineage DAG</span>
+                </button>
+                <button
+                  onClick={() => setViewMode('waterfall')}
+                  className={cn(
+                    'px-2.5 py-1 rounded-md transition-colors flex items-center gap-1.5',
+                    viewMode === 'waterfall'
+                      ? 'bg-slate-700 text-cyan-300 font-semibold shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  )}
+                  title="Latency Waterfall Timing View"
+                >
+                  <GanttChart className="w-3.5 h-3.5" />
+                  <span>Latency Waterfall</span>
+                </button>
+              </div>
+            )}
+
+            {/* Operator Kill-Switch Button */}
+            {(isRunning || isAwaiting) && (
+              <button
+                onClick={() => {
+                  setKillError(null);
+                  setShowKillModal(true);
+                }}
+                disabled={cancellingRun}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold bg-rose-600 hover:bg-rose-500 text-white border border-rose-500 shadow-sm shadow-rose-950 transition-colors disabled:opacity-50 shrink-0"
+                title="Emergency Kill-Switch: Halt active run and block subsequent LLM calls"
+              >
+                <OctagonX className="w-3.5 h-3.5 stroke-[2.2]" />
+                <span>Kill Run</span>
+              </button>
+            )}
+
+            {/* Live WS Status Badge */}
+            <LiveConnectionBadge status={wsStatus} />
+          </div>
         </div>
 
-        {/* Right: Metrics & Live Badge */}
-        <div className="flex items-center gap-2.5 sm:gap-3 text-xs font-mono text-slate-300 shrink-0">
-          {run && (
-            <>
-              {/* Agent Badge */}
-              <div
-                className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700/60 text-slate-300"
-                title={`Root Agent: ${run.agent_name || run.agent_id} (${run.team})`}
-              >
-                <Bot className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
-                <span className="truncate max-w-[120px]">
-                  {run.agent_name || run.agent_id}
-                </span>
-              </div>
+        {/* Line 2: Root Agent Name, Execution Time, Tokens, Cost, Replay, and Refresh */}
+        <div className="h-10 px-4 sm:px-6 flex items-center justify-between gap-3 bg-slate-950/40 text-xs font-mono">
+          {/* Left: Telemetry Metrics */}
+          <div className="flex items-center gap-2 sm:gap-3 overflow-x-auto no-scrollbar py-1">
+            {run ? (
+              <>
+                {/* Root Agent Name */}
+                <div
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700/60 text-slate-300 shrink-0"
+                  title={`Root Agent: ${run.agent_name || run.agent_id} (${run.team})`}
+                >
+                  <Bot className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                  <span className="font-semibold text-slate-200">
+                    {run.agent_name || run.agent_id}
+                  </span>
+                  <span className="text-slate-400 text-[11px]">
+                    ({run.team})
+                  </span>
+                </div>
 
-              {/* Duration Badge */}
-              <div
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700/60 text-slate-300"
-                title="Run Duration"
-              >
-                <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                <span>
-                  {run.duration_ms
-                    ? run.duration_ms < 1000
-                      ? `${Math.round(run.duration_ms)}ms`
-                      : `${(run.duration_ms / 1000).toFixed(1)}s`
-                    : 'running'}
-                </span>
-              </div>
+                {/* Execution Time */}
+                <div
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700/60 text-slate-300 shrink-0"
+                  title="Execution Time"
+                >
+                  <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <span>
+                    {run.duration_ms
+                      ? run.duration_ms < 1000
+                        ? `${Math.round(run.duration_ms)}ms`
+                        : `${(run.duration_ms / 1000).toFixed(1)}s`
+                      : 'running'}
+                  </span>
+                </div>
 
-              {/* Token Count Badge */}
-              <div
-                className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700/60 text-slate-300"
-                title="Total Tokens Recorded"
-              >
-                <Coins className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                <span>{(run.total_tokens || 0).toLocaleString()}</span>
-              </div>
+                {/* Tokens Used */}
+                <div
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700/60 text-slate-300 shrink-0"
+                  title="Tokens Used"
+                >
+                  <Coins className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>{(run.total_tokens || 0).toLocaleString()} tokens</span>
+                </div>
 
-              {/* Cost Badge */}
-              <div
-                className="hidden lg:flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700/60 text-slate-300"
-                title="Attributed Direct Cost"
-              >
-                <DollarSign className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span>
-                  {run.total_cost_usd !== undefined && run.total_cost_usd !== null
-                    ? Number(run.total_cost_usd).toFixed(4)
-                    : '0.0000'}
-                </span>
-              </div>
-            </>
-          )}
+                {/* Cost */}
+                <div
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700/60 text-slate-300 shrink-0"
+                  title="Attributed Direct Cost"
+                >
+                  <DollarSign className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>
+                    {run.total_cost_usd !== undefined && run.total_cost_usd !== null
+                      ? `$${Number(run.total_cost_usd).toFixed(4)}`
+                      : '$0.0000'}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <span className="text-slate-500 text-xs">Loading telemetry metrics...</span>
+            )}
+          </div>
 
-          {/* Operator Kill-Switch Button */}
-          {(isRunning || isAwaiting) && (
+          {/* Right: Replay Execution Button & Refresh Button */}
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Replay Execution Toggle Button */}
+            {graph && graph.nodes.length > 0 && (
+              <button
+                onClick={() => setIsReplaying((prev) => !prev)}
+                className={cn(
+                  'flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-medium border transition-colors',
+                  isReplaying
+                    ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 ring-1 ring-cyan-500/30'
+                    : 'bg-slate-800/80 text-slate-300 border-slate-700/60 hover:bg-slate-700 hover:text-white'
+                )}
+                title="Toggle Chronological Execution Replay"
+              >
+                <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                <span>{isReplaying ? 'Exit Replay' : 'Replay Execution'}</span>
+              </button>
+            )}
+
+            {/* Refresh Button */}
             <button
-              onClick={() => {
-                setKillError(null);
-                setShowKillModal(true);
-              }}
-              disabled={cancellingRun}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-semibold bg-rose-600 hover:bg-rose-500 text-white border border-rose-500 shadow-sm shadow-rose-950 transition-colors disabled:opacity-50"
-              title="Emergency Kill-Switch: Halt active run and block subsequent LLM calls"
+              onClick={refreshRunData}
+              disabled={loading}
+              className="p-1.5 rounded-lg bg-slate-800 border border-slate-700/60 text-slate-400 hover:text-slate-100 hover:bg-slate-700 transition-colors disabled:opacity-50"
+              title="Refresh Lineage Graph"
             >
-              <OctagonX className="w-3.5 h-3.5 stroke-[2.2]" />
-              <span>Kill Run</span>
+              <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} />
             </button>
-          )}
-
-          {/* Replay Execution Toggle Button */}
-          {graph && graph.nodes.length > 0 && (
-            <button
-              onClick={() => setIsReplaying((prev) => !prev)}
-              className={cn(
-                'flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono font-medium border transition-colors',
-                isReplaying
-                  ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 ring-1 ring-cyan-500/30'
-                  : 'bg-slate-800/80 text-slate-300 border-slate-700/60 hover:bg-slate-700 hover:text-white'
-              )}
-              title="Toggle Chronological Execution Replay"
-            >
-              <Activity className="w-3.5 h-3.5 text-cyan-400" />
-              <span>{isReplaying ? 'Exit Replay' : 'Replay Execution'}</span>
-            </button>
-          )}
-
-          {/* Refresh Button */}
-          <button
-            onClick={refreshRunData}
-            disabled={loading}
-            className="p-1.5 rounded-lg bg-slate-800 border border-slate-700/60 text-slate-400 hover:text-slate-100 hover:bg-slate-700 transition-colors disabled:opacity-50"
-            title="Refresh Lineage Graph"
-          >
-            <RefreshCw className={cn('w-3.5 h-3.5', loading && 'animate-spin')} />
-          </button>
-
-          {/* Live WS Status Badge */}
-          <LiveConnectionBadge status={wsStatus} />
+          </div>
         </div>
       </header>
 
@@ -451,12 +502,21 @@ function RunDetailContent({
               </div>
             </div>
           ) : displayGraph ? (
-            <LineageGraph
-              graph={displayGraph}
-              selectedSpanId={selectedSpan?.id}
-              onSelectSpan={setSelectedSpan}
-              impactedSpanIds={impactedSpanIds}
-            />
+            viewMode === 'waterfall' ? (
+              <WaterfallView
+                nodes={displayGraph.nodes}
+                selectedSpanId={selectedSpan?.id}
+                onSelectSpan={setSelectedSpan}
+                impactedSpanIds={impactedSpanIds}
+              />
+            ) : (
+              <LineageGraph
+                graph={displayGraph}
+                selectedSpanId={selectedSpan?.id}
+                onSelectSpan={setSelectedSpan}
+                impactedSpanIds={impactedSpanIds}
+              />
+            )
           ) : null}
 
           {/* Slide-over Span Inspector Drawer */}

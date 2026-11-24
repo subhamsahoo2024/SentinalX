@@ -19,11 +19,12 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 
-import { fetchAgents, fetchAlerts, fetchRuns } from '@/lib/api';
+import { fetchAgents, fetchAgentSlos, fetchAlerts, fetchRuns } from '@/lib/api';
 import { useWebSocketStream } from '@/hooks/useWebSocketStream';
 import { cn } from '@/lib/cn';
 import {
   AgentResponse,
+  AgentSloDTO,
   AlertDTO,
   RunListItemResponse,
   SpanStatus,
@@ -140,9 +141,20 @@ function StatusPill({ status }: { status: SpanStatus | string }) {
   }
 }
 
+function formatSloLatency(p50: number | null, p95: number | null): string {
+  if (p50 === null && p95 === null) return '—';
+  const fmt = (ms: number | null) => {
+    if (ms === null || isNaN(ms)) return '—';
+    if (ms < 1000) return `${Math.round(ms)}ms`;
+    return `${(ms / 1000).toFixed(1)}s`;
+  };
+  return `${fmt(p50)} / ${fmt(p95)}`;
+}
+
 export default function FleetOverviewPage() {
   const router = useRouter();
   const [agents, setAgents] = useState<AgentResponse[]>([]);
+  const [slos, setSlos] = useState<AgentSloDTO[]>([]);
   const [runs, setRuns] = useState<RunListItemResponse[]>([]);
   const [activeAlerts, setActiveAlerts] = useState<AlertDTO[]>([]);
   const [loading, setLoading] = useState(true);
@@ -152,14 +164,16 @@ export default function FleetOverviewPage() {
   const refreshData = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [agentsData, runsData, alertsData] = await Promise.all([
+      const [agentsData, runsData, alertsData, slosData] = await Promise.all([
         fetchAgents(),
         fetchRuns({ limit: 50 }),
         fetchAlerts({ acknowledged: false, limit: 10 }),
+        fetchAgentSlos(),
       ]);
       setAgents(agentsData);
       setRuns(runsData);
       setActiveAlerts(alertsData);
+      setSlos(slosData);
       setError(null);
     } catch (err: unknown) {
       console.warn('Failed to load fleet data:', err);
@@ -176,12 +190,14 @@ export default function FleetOverviewPage() {
       fetchAgents(),
       fetchRuns({ limit: 50 }),
       fetchAlerts({ acknowledged: false, limit: 10 }),
+      fetchAgentSlos(),
     ])
-      .then(([agentsData, runsData, alertsData]) => {
+      .then(([agentsData, runsData, alertsData, slosData]) => {
         if (isMounted) {
           setAgents(agentsData);
           setRuns(runsData);
           setActiveAlerts(alertsData);
+          setSlos(slosData);
           setLoading(false);
         }
       })
@@ -220,6 +236,15 @@ export default function FleetOverviewPage() {
     }
     return map;
   }, [agents]);
+
+  // Map SLOs by agent_id for fast lookup
+  const sloMap = useMemo(() => {
+    const map = new Map<string, AgentSloDTO>();
+    for (const s of slos) {
+      map.set(s.agent_id, s);
+    }
+    return map;
+  }, [slos]);
 
   // KPI calculations
   const activeAgentsCount = useMemo(() => {
@@ -581,6 +606,16 @@ export default function FleetOverviewPage() {
             {agents.map((agent) => {
               const isHealthy = agent.health_status === 'ACTIVE';
               const isIdle = agent.health_status === 'IDLE';
+              const slo = sloMap.get(agent.agent_id);
+              const successRate = slo ? slo.success_rate_pct : 100.0;
+              const successRateClass =
+                successRate >= 95
+                  ? 'text-emerald-400'
+                  : successRate >= 80
+                  ? 'text-amber-400'
+                  : 'text-rose-400';
+              const totalInvocations = slo ? slo.total_invocations : 0;
+              const anomalyCount = slo ? slo.anomaly_count : 0;
 
               return (
                 <div
@@ -651,8 +686,56 @@ export default function FleetOverviewPage() {
                     </div>
                   </div>
 
+                  {/* Compact 3-Column SLO Strip */}
+                  <div className="pt-3 border-t border-slate-800/60 grid grid-cols-3 gap-2 text-center text-xs font-mono">
+                    <div className="flex flex-col items-center">
+                      <span className="text-[10px] text-slate-400 uppercase tracking-wider">
+                        Success
+                      </span>
+                      <span className={cn('font-bold', successRateClass)}>
+                        {slo ? `${slo.success_rate_pct.toFixed(1)}%` : '100.0%'}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col items-center">
+                      <span className="text-[10px] text-slate-400 uppercase tracking-wider">
+                        p50 / p95
+                      </span>
+                      <span className="font-semibold text-slate-200 truncate max-w-full">
+                        {formatSloLatency(
+                          slo?.p50_duration_ms ?? null,
+                          slo?.p95_duration_ms ?? null
+                        )}
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col items-center">
+                      <span className="text-[10px] text-slate-400 uppercase tracking-wider">
+                        Invocations
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <span className="font-semibold text-slate-200">
+                          {totalInvocations}
+                        </span>
+                        {anomalyCount > 0 && (
+                          <span
+                            className={cn(
+                              'px-1.5 py-0.2 rounded text-[9px] font-bold border',
+                              anomalyCount >= 5
+                                ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
+                                : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                            )}
+                            title={`${anomalyCount} anomalies recorded`}
+                          >
+                            {anomalyCount}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
                   {/* Card Footer: Active Runs & Last Seen */}
-                  <div className="pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs text-slate-400 font-mono">
+                  <div className="pt-2 border-t border-slate-800/40 flex items-center justify-between text-xs text-slate-400 font-mono">
                     <div className="flex items-center gap-1.5">
                       <Activity className="w-3.5 h-3.5 text-cyan-400" />
                       <span>{agent.active_runs_count} active</span>

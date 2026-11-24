@@ -329,3 +329,19 @@ export interface PolicyUpdateInput {
   enabled?: boolean;
 }
 
+export interface AgentSloDTO {
+  agent_id: string;
+  display_name: string;
+  framework: string;
+  team: string;
+  total_invocations: number;
+  succeeded_count: number;
+  failed_count: number;
+  success_rate_pct: number;
+  p50_duration_ms: number | null;
+  p95_duration_ms: number | null;
+  avg_tokens_per_call: number;
+  anomaly_count: number;
+}
+
+

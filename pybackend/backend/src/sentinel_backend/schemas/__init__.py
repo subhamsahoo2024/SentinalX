@@ -22,6 +22,7 @@ from sentinel_backend.schemas.simulator import (
     SimulatorLaunchResponse,
 )
 from sentinel_backend.schemas.telemetry import (
+    AgentSloDTO,
     CanonicalEventV1,
     CostBasis,
     CostInfo,
@@ -38,6 +39,7 @@ from sentinel_backend.schemas.telemetry import (
 )
 
 __all__ = [
+    "AgentSloDTO",
     "AlertDTO",
     "ApprovalDTO",
     "ApprovalDecisionRequest",

@@ -1,5 +1,6 @@
 import {
   AgentResponse,
+  AgentSloDTO,
   AlertDTO,
   ApprovalDTO,
   AuditEventDTO,
@@ -95,6 +96,19 @@ export async function fetchAgents(): Promise<AgentResponse[]> {
   });
   if (!res.ok) {
     throw new Error(`Failed to fetch agents: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
+/**
+ * Fetch per-agent Service Level Objective (SLO) metrics.
+ */
+export async function fetchAgentSlos(): Promise<AgentSloDTO[]> {
+  const res = await fetch(`${API_BASE_URL}/api/agents/slos`, {
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to fetch agent SLOs: ${res.status} ${res.statusText}`);
   }
   return res.json();
 }
