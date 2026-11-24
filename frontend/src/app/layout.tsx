@@ -38,6 +38,7 @@ export default function RootLayout({
             <Sidebar />
           </Suspense>
           <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+            {/* Top header bar renders <LaunchScenarioModal />, <LiveConnectionBadge />, and <UserSessionMenu /> */}
             <Suspense fallback={<header className="relative z-40 h-16 border-b border-slate-800 bg-slate-900/40 shrink-0" />}>
               <Header />
             </Suspense>

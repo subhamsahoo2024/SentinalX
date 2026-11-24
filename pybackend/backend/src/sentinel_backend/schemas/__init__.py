@@ -16,6 +16,11 @@ from sentinel_backend.schemas.policies import (
     PolicyDTO,
     PolicyUpdate,
 )
+from sentinel_backend.schemas.simulator import (
+    ScenarioName,
+    SimulatorLaunchRequest,
+    SimulatorLaunchResponse,
+)
 from sentinel_backend.schemas.telemetry import (
     CanonicalEventV1,
     CostBasis,
@@ -54,6 +59,9 @@ __all__ = [
     "PricingVersionCreate",
     "PricingVersionDTO",
     "RunSummaryDTO",
+    "ScenarioName",
+    "SimulatorLaunchRequest",
+    "SimulatorLaunchResponse",
     "SpanStatus",
     "SpanType",
     "TelemetryBatchRequest",

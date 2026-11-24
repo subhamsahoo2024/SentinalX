@@ -3,6 +3,7 @@
 import { usePathname } from 'next/navigation';
 import { LiveConnectionBadge } from './LiveConnectionBadge';
 import { UserSessionMenu } from './governance/UserSessionMenu';
+import { LaunchScenarioModal } from './simulator/LaunchScenarioModal';
 
 export function Header() {
   const pathname = usePathname();
@@ -27,6 +28,9 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-3">
+        {/* Scenario & Chaos Simulator Launcher */}
+        <LaunchScenarioModal />
+
         {/* Live WebSocket connection indicator */}
         <LiveConnectionBadge />
 

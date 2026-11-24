@@ -15,7 +15,29 @@ import {
   RunSummaryDTO,
   SpanDTO,
 } from '@/types/telemetry';
-import { getStoredToken } from '@/lib/auth';
+import { getStoredToken, getStoredUser } from '@/lib/auth';
+
+export type ScenarioType =
+  | 'normal'
+  | 'hitl'
+  | 'loop'
+  | 'slow_loop'
+  | 'cascade'
+  | 'budget'
+  | 'stall';
+
+export interface SimulatorLaunchPayload {
+  scenario: ScenarioType;
+  team: string;
+  live_llm: boolean;
+}
+
+export interface SimulatorLaunchResponse {
+  run_id: string;
+  scenario: ScenarioType;
+  team: string;
+  status: string;
+}
 
 const API_BASE_URL = (
   process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'
@@ -377,6 +399,26 @@ export async function cancelRun(
     actorRole,
   });
 }
+
+/**
+ * Launch a simulated multi-agent chaos or demo scenario asynchronously.
+ */
+export async function launchSimulationScenario(
+  payload: { scenario: ScenarioType; team: string; live_llm: boolean },
+  actorRole?: string
+): Promise<{ run_id: string; scenario: ScenarioType; team: string; status: string }> {
+  const storedUser = getStoredUser();
+  const effectiveRole = actorRole || storedUser?.role;
+  return apiFetch('/api/simulator/run', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    ...(effectiveRole ? { actorRole: effectiveRole } : {}),
+    body: JSON.stringify(payload),
+  });
+}
+
 
 
 

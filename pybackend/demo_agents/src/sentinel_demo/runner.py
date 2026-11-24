@@ -1,6 +1,15 @@
 import argparse
+import contextlib
 import os
 import sys
+
+# Ensure UTF-8 output encoding across platforms (prevents cp1252 charmap errors on Windows)
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    with contextlib.suppress(Exception):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    with contextlib.suppress(Exception):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 import sentinel_sdk
 from dotenv import load_dotenv
@@ -49,6 +58,12 @@ def main() -> None:
         help="Incident description",
     )
     parser.add_argument(
+        "--run-id",
+        type=str,
+        default=None,
+        help="Deterministic run ID override (default: auto-generated)",
+    )
+    parser.add_argument(
         "--team",
         type=str,
         default="it-ops",
@@ -82,8 +97,11 @@ def main() -> None:
     run_id: str | None = None
     trace_id: str | None = None
 
+    if not hasattr(args, "run_id"):
+        args.run_id = None
+
     try:
-        with start_run(team=args.team) as run_ctx:
+        with start_run(run_id=args.run_id, team=args.team) as run_ctx:
             run_id = run_ctx.run_id
             trace_id = run_ctx.trace_id
 

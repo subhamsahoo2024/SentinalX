@@ -135,35 +135,54 @@ function RunDetailContent({
     }
   }, [runId]);
 
-  // Initial fetch: microtask prevents synchronous setState within effect body
+  // Initial fetch: polls with retry grace period for freshly launched simulator runs
   useEffect(() => {
     let isMounted = true;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+    const maxAttempts = 10; // 10 * 500ms = 5s grace period while simulator initializes
+
     if (!runId) return;
 
-    Promise.all([
-      fetchRunById(runId),
-      fetchRunLineage(runId),
-      fetchAlerts({ run_id: runId }),
-    ])
-      .then(([runData, graphData, alertsData]) => {
+    const loadData = async () => {
+      try {
+        const [runData, graphData, alertsData] = await Promise.all([
+          fetchRunById(runId),
+          fetchRunLineage(runId),
+          fetchAlerts({ run_id: runId }),
+        ]);
+
         if (!isMounted) return;
         setRun(runData);
         setGraph(graphData);
         setAlerts(alertsData);
         setError(null);
         setLoading(false);
-      })
-      .catch((err: unknown) => {
+      } catch (err: unknown) {
         if (!isMounted) return;
+        const msg = err instanceof Error ? err.message : String(err);
+
+        // If 404 (run telemetry not yet committed by newly spawned runner process), poll again
+        if (
+          (msg.includes('404') || msg.toLowerCase().includes('not found')) &&
+          attempts < maxAttempts
+        ) {
+          attempts += 1;
+          timeoutId = setTimeout(loadData, 500);
+          return;
+        }
+
         console.warn('Failed to load run telemetry:', err);
-        setError(
-          err instanceof Error ? err.message : 'Failed to load run telemetry'
-        );
+        setError(msg);
         setLoading(false);
-      });
+      }
+    };
+
+    loadData();
 
     return () => {
       isMounted = false;
+      if (timeoutId) clearTimeout(timeoutId);
     };
   }, [runId]);
 

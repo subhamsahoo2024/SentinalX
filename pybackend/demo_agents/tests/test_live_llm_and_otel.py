@@ -260,6 +260,51 @@ def test_runner_live_llm_flag():
             assert os.environ.get("SENTINEL_LIVE_LLM") == "true"
 
 
+def test_runner_cli_args_deterministic_run_id_and_team():
+    from unittest.mock import MagicMock
+
+    from sentinel_demo.runner import main
+
+    with patch("sentinel_demo.runner.start_run") as mock_start_run, patch(
+        "sentinel_demo.runner.run_coordinator_agent"
+    ) as mock_agent, patch("sentinel_sdk.flush") as mock_flush:
+        mock_ctx = MagicMock()
+        mock_ctx.run_id = "run_det_42"
+        mock_ctx.trace_id = "trc_42"
+        mock_start_run.return_value.__enter__.return_value = mock_ctx
+        mock_agent.return_value = {"status": "RESOLVED"}
+
+        with patch("sys.argv", ["runner.py", "--run-id", "run_det_42", "--team", "security-ops"]):
+            main()
+
+        mock_start_run.assert_called_once_with(run_id="run_det_42", team="security-ops")
+        mock_flush.assert_called_once()
+
+
+def test_runner_all_scenarios_pass_run_metadata_and_flush():
+    from unittest.mock import MagicMock
+
+    from sentinel_demo.runner import main
+
+    scenarios = ["normal", "hitl", "loop", "budget", "cascade", "stall", "slow_loop"]
+
+    for sc in scenarios:
+        with patch("sentinel_demo.runner.start_run") as mock_start_run, patch(
+            "sentinel_demo.runner.run_coordinator_agent"
+        ) as mock_agent, patch("sentinel_sdk.flush") as mock_flush:
+            mock_ctx = MagicMock()
+            mock_ctx.run_id = f"run_{sc}_123"
+            mock_ctx.trace_id = f"trc_{sc}_123"
+            mock_start_run.return_value.__enter__.return_value = mock_ctx
+            mock_agent.return_value = {"status": "RESOLVED"}
+
+            with patch("sys.argv", ["runner.py", "--scenario", sc, "--run-id", f"run_{sc}_123", "--team", "custom-team"]):
+                main()
+
+            mock_start_run.assert_called_once_with(run_id=f"run_{sc}_123", team="custom-team")
+            mock_flush.assert_called_once()
+
+
 # ==============================================================================
 # 3. Tests for otel_external_sample.py
 # ==============================================================================
