@@ -21,6 +21,7 @@ import {
 
 import { fetchAgents, fetchAgentSlos, fetchAlerts, fetchRuns } from '@/lib/api';
 import { useWebSocketStream } from '@/hooks/useWebSocketStream';
+import { AgentProfileModal } from '@/components/AgentProfileModal';
 import { cn } from '@/lib/cn';
 import {
   AgentResponse,
@@ -154,6 +155,7 @@ function formatSloLatency(p50: number | null, p95: number | null): string {
 export default function FleetOverviewPage() {
   const router = useRouter();
   const [agents, setAgents] = useState<AgentResponse[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState<AgentResponse | null>(null);
   const [slos, setSlos] = useState<AgentSloDTO[]>([]);
   const [runs, setRuns] = useState<RunListItemResponse[]>([]);
   const [activeAlerts, setActiveAlerts] = useState<AlertDTO[]>([]);
@@ -620,7 +622,16 @@ export default function FleetOverviewPage() {
               return (
                 <div
                   key={agent.agent_id}
-                  className="p-5 rounded-xl bg-slate-900/50 border border-slate-800 hover:border-slate-700/80 transition-all flex flex-col justify-between space-y-4"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelectedAgent(agent)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      setSelectedAgent(agent);
+                    }
+                  }}
+                  className="p-5 rounded-xl bg-slate-900/50 border border-slate-800 hover:border-cyan-500/60 hover:shadow-lg hover:shadow-cyan-950/20 transition-all flex flex-col justify-between space-y-4 cursor-pointer select-none group text-left"
+                  title="Click to view full agent profile"
                 >
                   <div className="space-y-3">
                     {/* Header: Name and Health Dot */}
@@ -740,9 +751,14 @@ export default function FleetOverviewPage() {
                       <Activity className="w-3.5 h-3.5 text-cyan-400" />
                       <span>{agent.active_runs_count} active</span>
                     </div>
-                    <span title={agent.last_seen_at}>
-                      {formatRelativeTime(agent.last_seen_at)}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span title={agent.last_seen_at}>
+                        {formatRelativeTime(agent.last_seen_at)}
+                      </span>
+                      <span className="text-[10px] text-slate-500 group-hover:text-cyan-400 transition-colors">
+                        Inspect &rarr;
+                      </span>
+                    </div>
                   </div>
                 </div>
               );
@@ -875,6 +891,19 @@ export default function FleetOverviewPage() {
           </div>
         </div>
       </section>
+
+      {/* Complete Agent Profile Modal Card */}
+      <AgentProfileModal
+        agent={selectedAgent}
+        slo={selectedAgent ? sloMap.get(selectedAgent.agent_id) : null}
+        recentRuns={
+          selectedAgent
+            ? runs.filter((r) => r.root_agent_id === selectedAgent.agent_id)
+            : []
+        }
+        isOpen={selectedAgent !== null}
+        onClose={() => setSelectedAgent(null)}
+      />
     </div>
   );
 }
