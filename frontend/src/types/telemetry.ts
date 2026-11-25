@@ -249,6 +249,44 @@ export interface AuditEventDTO {
   created_at: string;
 }
 
+export interface AuditChainVerificationDTO {
+  valid: boolean;
+  total_events: number;
+  latest_hash: string | null;
+  broken_at_audit_id: string | null;
+}
+
+export interface SentinelUser {
+  user_id: string;
+  email: string;
+  display_name: string;
+  role: ActorRole | string;
+}
+
+export type ScenarioType =
+  | 'normal'
+  | 'hitl'
+  | 'loop'
+  | 'slow_loop'
+  | 'cascade'
+  | 'budget'
+  | 'stall';
+
+export interface LaunchScenarioPayload {
+  scenario: ScenarioType;
+  team?: string;
+  live_llm?: boolean;
+}
+
+export interface LaunchScenarioResponse {
+  run_id: string;
+  trace_id?: string;
+  scenario: ScenarioType;
+  team?: string;
+  status: string;
+  message?: string;
+}
+
 export interface PricingVersionCreate {
   provider: string;
   model_name: string;

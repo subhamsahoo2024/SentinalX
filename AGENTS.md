@@ -12,8 +12,9 @@ The platform includes:
 - Fleet Overview dashboard showing active agents, health status, runs, tokens, and spend
 - Real-time interactive Agent Lineage DAG built with React Flow and Dagre
 - Synchronous Human-in-the-Loop (HITL) pre-execution approval gate with RBAC and append-only audit logs
+- Dynamic Governance Policies console (`/policies`) for hierarchical token/cost limits, loop thresholds, and circuit-breakers
 - Deterministic causal anomaly detection (repeated tool loops, token/cost budget overruns, stalled runs, and upstream root-cause tracing)
-- Versioned cost attribution without double-counting and chronological execution replay
+- Versioned cost attribution without double-counting, Latency Waterfall view, chronological execution replay, and Scenario Simulator launcher
 Keep the implementation simple and readable.
 ---
 ## Tech Stack
@@ -22,8 +23,8 @@ Keep the implementation simple and readable.
 - PostgreSQL 16 with SQLAlchemy 2.0 (asyncpg) and Alembic
 - Redis 7 (Pub/Sub for live WebSocket streaming and HITL approval wakeup)
 - Pydantic v2 and OpenTelemetry API
-- Next.js 15 (App Router) and TypeScript
-- Tailwind CSS
+- Next.js 16 (App Router, Turbopack), React 19, and TypeScript
+- Tailwind CSS v4 (with dual light/dark theme support)
 - `@xyflow/react` and `@dagrejs/dagre`
 - `lucide-react` and `date-fns`
 Do not introduce new major libraries unless there is a strong reason.
@@ -74,33 +75,37 @@ sentinal-x/
 │   └── demo_agents/
 │       └── src/sentinel_demo/
 └── frontend/
-└── src/
-├── app/
-│   ├── approvals/
-│   ├── costs/
-│   └── runs/[runId]/
-├── components/
-│   ├── governance/
-│   ├── lineage/
-│   └── replay/
-├── hooks/
-├── lib/
-└── types/
+    ├── public/assets/
+    └── src/
+        ├── app/
+        │   ├── approvals/
+        │   ├── costs/
+        │   ├── policies/
+        │   └── runs/[runId]/
+        ├── components/
+        │   ├── governance/
+        │   ├── lineage/
+        │   ├── replay/
+        │   └── simulator/
+        ├── hooks/
+        ├── lib/
+        └── types/
 
 ```
 **pybackend/sdk/** is for framework-neutral instrumentation decorators, context propagation, PII redaction, and the Canonical Event v1.0 schema. Keep it lightweight and independent of backend database models.
 **pybackend/backend/src/sentinel_backend/api/** is for FastAPI route handlers and WebSocket endpoints only. Keep business logic in **services/**.
 **pybackend/backend/src/sentinel_backend/services/** is for core domain logic (telemetry ingestion, lineage DAG construction, anomaly and root-cause evaluation, cost calculation, and Redis Pub/Sub).
 **pybackend/demo_agents/** is for reproducible multi-agent test scenarios (normal delegation, tool loops, budget overruns, cascading failures, and HITL gates).
-**frontend/src/app/** is for Next.js App Router pages and layouts only. Pages compose components and call hooks or API helpers. They should not contain large reusable UI blocks or graph layout logic.
-**frontend/src/components/** is for reusable UI grouped by domain. Create a component when it is reused in multiple places, when it makes a page easier to read, or when it represents a clear UI concept. Examples for this app: `LineageGraph`, `SpanNode`, `SpanInspector`, `ApprovalModal`, `TimelineReplay`. Do not create components too early.
-**frontend/src/hooks/** is for reusable client hooks such as `useWebSocketStream`.
-**frontend/src/lib/** is for typed API clients and utility helpers (`api.ts`, `cn.ts`). Never expose secret keys here.
+**frontend/public/assets/** stores static branding images referenced centrally via `frontend/src/lib/assets.ts`.
+**frontend/src/app/** is for Next.js App Router pages and layouts only (`/`, `/approvals`, `/costs`, `/policies`, `/runs/[runId]`). Pages compose components and call hooks or API helpers. They should not contain large reusable UI blocks or graph layout logic.
+**frontend/src/components/** is for reusable UI grouped by domain: shell (`AppShell`, `Sidebar`, `Header`, `StatusBadge`, `LiveConnectionBadge`, `AgentProfileModal`), `governance/` (`ApprovalContext`, `ApprovalModal`, `UserSessionMenu`), `lineage/` (`LineageGraph`, `SpanNode`, `SpanInspector`, `WaterfallView`, `RunAlertsBanner`), `replay/` (`TimelineReplay`), and `simulator/` (`LaunchScenarioModal`).
+**frontend/src/hooks/** is for reusable client hooks (`useWebSocketStream`, `use-theme`, `use-mobile`, `use-is-client`).
+**frontend/src/lib/** is for typed API clients, auth helpers, formatters, centralized asset paths, and utilities (`api.ts`, `auth.ts`, `assets.ts`, `format.ts`, `utils.ts`, `cn.ts`). Never expose secret keys here.
 **frontend/src/types/** is for TypeScript interfaces mirroring backend Pydantic DTOs and Canonical Event v1.0.
 ---
 ## UI Rules
 For any UI task:
-- Replicate the provided design or dark-mode observability aesthetic consistently.
+- Maintain the Sentinel-X light (`#F5F9FF` / `#041533` / `#0257D5`) and dark (`#030A17` / `#07152E` / `#00C2FF`) observability aesthetic consistently via `useTheme()` and `dark:` variants.
 - Match layout, spacing, padding, font sizes, font hierarchy, colors,
 border radius, shadows, alignment, and proportions.
 
@@ -109,7 +114,7 @@ border radius, shadows, alignment, and proportions.
 ## Styling Rules
 Use Tailwind CSS utility classes. Do not write custom CSS files unless it is not possible to style with Tailwind classes.
 Use the Tailwind CSS version installed in `frontend/package.json`. Do not upgrade without approval.
-Reuse class patterns through `cn()` (`clsx` + `tailwind-merge`) in `frontend/src/lib/cn.ts`.
+Reuse class patterns through `cn()` (`clsx` + `tailwind-merge`) in `frontend/src/lib/utils.ts` (or `cn.ts`).
 ### Style Exception List
 Use inline `style` props or scoped CSS only for:
 - React Flow (`@xyflow/react`) node coordinates, handle positioning, and dynamic edge stroke animations

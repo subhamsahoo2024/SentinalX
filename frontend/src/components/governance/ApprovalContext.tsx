@@ -9,8 +9,9 @@ import React, {
   useState,
 } from 'react';
 import { fetchApprovals, submitApprovalDecision } from '@/lib/api';
-import { ApprovalDTO, WebSocketMessage } from '@/types/telemetry';
+import { getStoredUser } from '@/lib/auth';
 import { useWebSocketStream } from '@/hooks/useWebSocketStream';
+import type { ActorRole, ApprovalDTO, WebSocketMessage } from '@/types/telemetry';
 
 interface ApprovalContextType {
   pendingApprovals: ApprovalDTO[];
@@ -20,8 +21,8 @@ interface ApprovalContextType {
   decideApproval: (
     approvalId: string,
     decision: 'APPROVED' | 'REJECTED',
-    comment: string,
-    role: string
+    comment?: string,
+    role?: ActorRole | string,
   ) => Promise<ApprovalDTO>;
 }
 
@@ -34,7 +35,7 @@ export function ApprovalProvider({ children }: { children: React.ReactNode }) {
   const refreshPending = useCallback(async () => {
     try {
       const data = await fetchApprovals('PENDING');
-      setPendingApprovals(data);
+      setPendingApprovals(data.filter((item) => item.status === 'PENDING'));
     } catch (err) {
       console.warn('Failed to fetch pending approvals:', err);
     } finally {
@@ -42,13 +43,12 @@ export function ApprovalProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  // Fetch pending approvals on mount
   useEffect(() => {
     let isMounted = true;
     fetchApprovals('PENDING')
       .then((data) => {
         if (isMounted) {
-          setPendingApprovals(data);
+          setPendingApprovals(data.filter((item) => item.status === 'PENDING'));
           setIsLoading(false);
         }
       })
@@ -64,7 +64,6 @@ export function ApprovalProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Handle incoming live fleet WebSocket messages
   const handleWebSocketMessage = useCallback(
     (msg: WebSocketMessage<unknown>) => {
       if (!msg || typeof msg !== 'object') return;
@@ -74,11 +73,11 @@ export function ApprovalProvider({ children }: { children: React.ReactNode }) {
         if (newApproval && newApproval.approval_id) {
           setPendingApprovals((prev) => {
             const exists = prev.some(
-              (a) => a.approval_id === newApproval.approval_id
+              (a) => a.approval_id === newApproval.approval_id,
             );
             if (exists) {
               return prev.map((a) =>
-                a.approval_id === newApproval.approval_id ? newApproval : a
+                a.approval_id === newApproval.approval_id ? newApproval : a,
               );
             }
             return [newApproval, ...prev];
@@ -96,40 +95,41 @@ export function ApprovalProvider({ children }: { children: React.ReactNode }) {
 
         if (decidedId) {
           setPendingApprovals((prev) =>
-            prev.filter((a) => a.approval_id !== decidedId)
+            prev.filter((a) => a.approval_id !== decidedId),
           );
         } else {
-          // Re-sync with backend to ensure state accuracy
-          refreshPending();
+          void refreshPending();
         }
       }
     },
-    [refreshPending]
+    [refreshPending],
   );
 
-  // Subscribe to live fleet websocket stream
   useWebSocketStream('/ws/fleet', handleWebSocketMessage);
 
   const decideApproval = useCallback(
     async (
       approvalId: string,
       decision: 'APPROVED' | 'REJECTED',
-      comment: string,
-      role: string
+      comment?: string,
+      role?: ActorRole | string,
     ): Promise<ApprovalDTO> => {
+      const user = getStoredUser();
+      const effectiveRole = role || user?.role || 'approver';
+      const actorId = user?.email || `${effectiveRole}@sentinel.local`;
       const updated = await submitApprovalDecision(
         approvalId,
         decision,
-        comment,
-        role
+        comment ?? '',
+        String(effectiveRole),
+        actorId,
       );
-      // Remove from pending list on success
       setPendingApprovals((prev) =>
-        prev.filter((a) => a.approval_id !== approvalId)
+        prev.filter((a) => a.approval_id !== approvalId),
       );
       return updated;
     },
-    []
+    [],
   );
 
   const value = useMemo(
@@ -140,7 +140,7 @@ export function ApprovalProvider({ children }: { children: React.ReactNode }) {
       refreshPending,
       decideApproval,
     }),
-    [pendingApprovals, isLoading, refreshPending, decideApproval]
+    [pendingApprovals, isLoading, refreshPending, decideApproval],
   );
 
   return (
@@ -157,4 +157,3 @@ export function useApprovals(): ApprovalContextType {
   }
   return context;
 }
-

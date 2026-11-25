@@ -1,100 +1,35 @@
 'use client';
 
-import { useMemo, useSyncExternalStore } from 'react';
-import {
-  Bot,
-  Cpu,
-  Wrench,
-  ShieldAlert,
-  Clock,
-  Flame,
-} from 'lucide-react';
-import { cn } from '@/lib/cn';
-import { LineageNodeDTO } from '@/types/telemetry';
+import { useMemo } from 'react';
+import { Bot, Cpu, ShieldAlert, Wrench } from 'lucide-react';
+import { formatDurationMs } from '@/lib/format';
+import { cn } from '@/lib/utils';
+import type { LineageNodeDTO } from '@/types/telemetry';
 
-let cachedNow = typeof window !== 'undefined' ? Date.now() : 0;
-const listeners = new Set<() => void>();
-
-if (typeof window !== 'undefined') {
-  setInterval(() => {
-    cachedNow = Date.now();
-    listeners.forEach((listener) => listener());
-  }, 1000);
-}
-
-function subscribeTime(callback: () => void) {
-  listeners.add(callback);
-  return () => {
-    listeners.delete(callback);
-  };
-}
-
-function getSnapshotTime(): number {
-  return cachedNow;
-}
-
-function getServerSnapshotTime(): number {
-  return 0;
-}
-
-export interface WaterfallViewProps {
+interface WaterfallViewProps {
   nodes: LineageNodeDTO[];
   selectedSpanId?: string | null;
   impactedSpanIds?: string[];
   onSelectSpan: (node: LineageNodeDTO) => void;
 }
 
-function formatDuration(ms: number): string {
-  if (isNaN(ms) || ms < 0) return '0ms';
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 10000) return `${(ms / 1000).toFixed(2)}s`;
-  return `${(ms / 1000).toFixed(1)}s`;
+interface OrderedSpanRow {
+  node: LineageNodeDTO;
+  depth: number;
 }
 
-function getSpanTypeIcon(spanType: string) {
-  const typeUpper = spanType.toUpperCase();
-  if (typeUpper === 'LLM') {
-    return <Cpu className="w-3.5 h-3.5 text-cyan-400 shrink-0" />;
+function SpanIcon({ type }: { type: string }) {
+  const upper = type.toUpperCase();
+  if (upper === 'LLM') {
+    return <Cpu className="h-3.5 w-3.5 text-[#0257D5] dark:text-[#38BDF8] shrink-0" aria-hidden="true" />;
   }
-  if (typeUpper === 'TOOL') {
-    return <Wrench className="w-3.5 h-3.5 text-emerald-400 shrink-0" />;
+  if (upper === 'TOOL') {
+    return <Wrench className="h-3.5 w-3.5 text-[#008BB8] dark:text-[#00C2FF] shrink-0" aria-hidden="true" />;
   }
-  if (typeUpper === 'APPROVAL') {
-    return <ShieldAlert className="w-3.5 h-3.5 text-amber-400 shrink-0" />;
+  if (upper === 'APPROVAL') {
+    return <ShieldAlert className="h-3.5 w-3.5 text-amber-700 dark:text-amber-400 shrink-0" aria-hidden="true" />;
   }
-  return <Bot className="w-3.5 h-3.5 text-indigo-400 shrink-0" />;
-}
-
-function getBarColorClass(node: LineageNodeDTO): string {
-  const statusUpper = (node.status || '').toUpperCase();
-  const typeUpper = (node.span_type || '').toUpperCase();
-
-  if (
-    node.is_root_cause ||
-    statusUpper === 'FAILED' ||
-    statusUpper === 'TIMED_OUT' ||
-    statusUpper === 'CANCELLED'
-  ) {
-    return 'bg-rose-500/85 border border-rose-400 shadow-sm shadow-rose-950/40';
-  }
-
-  if (statusUpper === 'AWAITING_APPROVAL') {
-    return 'bg-amber-500/85 border border-amber-300 animate-pulse';
-  }
-
-  if (typeUpper === 'LLM') {
-    return 'bg-cyan-500/80 border border-cyan-400';
-  }
-
-  if (typeUpper === 'TOOL') {
-    return 'bg-emerald-500/80 border border-emerald-400';
-  }
-
-  if (typeUpper === 'AGENT') {
-    return 'bg-indigo-500/80 border border-indigo-400';
-  }
-
-  return 'bg-slate-600/80 border border-slate-500';
+  return <Bot className="h-3.5 w-3.5 text-[#041533] dark:text-slate-200 shrink-0" aria-hidden="true" />;
 }
 
 export function WaterfallView({
@@ -103,262 +38,165 @@ export function WaterfallView({
   impactedSpanIds = [],
   onSelectSpan,
 }: WaterfallViewProps) {
-  const currentNow = useSyncExternalStore(
-    subscribeTime,
-    getSnapshotTime,
-    getServerSnapshotTime
-  );
-
-  // Tree flattening & Depth-First Traversal
-  const { flattened, traceStartMs, totalSpanMs } = useMemo(() => {
-    if (!nodes || nodes.length === 0) {
-      return { flattened: [], traceStartMs: 0, totalSpanMs: 1 };
+  const { orderedRows, traceStartMs, totalDurationMs } = useMemo(() => {
+    if (nodes.length === 0) {
+      return { orderedRows: [] as OrderedSpanRow[], traceStartMs: 0, totalDurationMs: 1 };
     }
 
-    const nodeSpanIds = new Set(nodes.map((n) => n.span_id || n.id));
-    const childrenMap = new Map<string, LineageNodeDTO[]>();
-    const roots: LineageNodeDTO[] = [];
+    const byParent = new Map<string | null, LineageNodeDTO[]>();
+    const nodeIds = new Set(nodes.map((n) => n.span_id));
 
-    nodes.forEach((node) => {
-      const parentId = node.parent_span_id;
-      if (!parentId || !nodeSpanIds.has(parentId)) {
-        roots.push(node);
-      } else {
-        const list = childrenMap.get(parentId) || [];
-        list.push(node);
-        childrenMap.set(parentId, list);
-      }
-    });
+    let minStart = Infinity;
+    let maxEnd = -Infinity;
 
-    const sortByStartedAt = (a: LineageNodeDTO, b: LineageNodeDTO) => {
-      const aTime = Date.parse(a.started_at) || 0;
-      const bTime = Date.parse(b.started_at) || 0;
-      return aTime - bTime;
-    };
+    for (const n of nodes) {
+      const s = Date.parse(n.started_at);
+      const dur = n.duration_ms ?? 250;
+      const e = n.ended_at ? Date.parse(n.ended_at) : s + dur;
+      if (!Number.isNaN(s)) minStart = Math.min(minStart, s);
+      if (!Number.isNaN(e)) maxEnd = Math.max(maxEnd, e);
 
-    roots.sort(sortByStartedAt);
-    childrenMap.forEach((children) => {
-      children.sort(sortByStartedAt);
-    });
+      const parentKey =
+        n.parent_span_id && nodeIds.has(n.parent_span_id) ? n.parent_span_id : null;
+      const group = byParent.get(parentKey) || [];
+      group.push(n);
+      byParent.set(parentKey, group);
+    }
 
-    const items: { node: LineageNodeDTO; depth: number }[] = [];
+    for (const list of byParent.values()) {
+      list.sort((a, b) => Date.parse(a.started_at) - Date.parse(b.started_at));
+    }
+
+    const rows: OrderedSpanRow[] = [];
     const visited = new Set<string>();
 
-    const traverse = (node: LineageNodeDTO, depth: number) => {
-      const spanKey = node.span_id || node.id;
-      if (visited.has(spanKey)) return;
-      visited.add(spanKey);
-
-      items.push({ node, depth });
-
-      const children = childrenMap.get(spanKey) || [];
+    const walk = (parentId: string | null, depth: number) => {
+      const children = byParent.get(parentId) || [];
       for (const child of children) {
-        traverse(child, depth + 1);
+        if (visited.has(child.span_id)) continue;
+        visited.add(child.span_id);
+        rows.push({ node: child, depth });
+        walk(child.span_id, depth + 1);
       }
     };
 
-    for (const root of roots) {
-      traverse(root, 0);
-    }
+    walk(null, 0);
 
-    // Safety fallback for any unvisited disconnected nodes
-    for (const node of nodes) {
-      const spanKey = node.span_id || node.id;
-      if (!visited.has(spanKey)) {
-        traverse(node, 0);
+    for (const n of nodes) {
+      if (!visited.has(n.span_id)) {
+        rows.push({ node: n, depth: 0 });
       }
     }
 
-    // Timing math
-    const referenceNow =
-      currentNow > 0
-        ? currentNow
-        : Math.max(0, ...nodes.map((n) => Date.parse(n.started_at) || 0));
-
-    const startTimes = nodes.map((n) => {
-      const t = Date.parse(n.started_at);
-      return isNaN(t) ? referenceNow : t;
-    });
-
-    const endTimes = nodes.map((n) => {
-      if (n.ended_at) {
-        const t = Date.parse(n.ended_at);
-        return isNaN(t) ? referenceNow : t;
-      }
-      return referenceNow;
-    });
-
-    const startMs = Math.min(...startTimes);
-    const endMs = Math.max(...endTimes);
-    const spanMs = Math.max(1, endMs - startMs);
+    const safeMin = Number.isFinite(minStart) ? minStart : 0;
+    const safeMax = Number.isFinite(maxEnd) ? maxEnd : safeMin + 1000;
 
     return {
-      flattened: items,
-      traceStartMs: startMs,
-      totalSpanMs: spanMs,
+      orderedRows: rows,
+      traceStartMs: safeMin,
+      totalDurationMs: Math.max(100, safeMax - safeMin),
     };
-  }, [nodes, currentNow]);
+  }, [nodes]);
 
-  if (nodes.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full w-full p-8 text-center bg-slate-950/60 rounded-xl border border-slate-800/80 font-mono text-xs text-slate-400">
-        <Clock className="w-8 h-8 mb-2 text-slate-600" />
-        <span className="font-semibold text-slate-300">No execution spans recorded</span>
-        <span className="text-slate-500 mt-1">
-          Spans will appear here in waterfall hierarchy as the run progresses.
-        </span>
-      </div>
-    );
-  }
+  const impactedSet = useMemo(() => new Set(impactedSpanIds), [impactedSpanIds]);
+  const rulerTicks = [0, 0.25, 0.5, 0.75, 1];
 
   return (
-    <div className="flex flex-col h-full w-full bg-slate-950 rounded-xl border border-slate-800/80 overflow-hidden shadow-2xl">
-      {/* Header Timeline Ruler */}
-      <div className="sticky top-0 z-20 flex items-center bg-slate-900/95 backdrop-blur-md border-b border-slate-800 h-9 shrink-0 select-none">
-        {/* Left: Execution Hierarchy Label */}
-        <div className="w-80 shrink-0 px-4 flex items-center text-[11px] font-mono font-bold tracking-wider text-slate-400 uppercase border-r border-slate-800/80">
-          Execution Hierarchy
-        </div>
-
-        {/* Right: Timeline Scale & Ticks */}
-        <div className="flex-1 relative h-full flex items-center px-4 font-mono text-[10px] text-slate-400">
-          <span className="absolute left-4">0ms</span>
-          <span className="absolute left-[25%] -translate-x-1/2">
-            25% ({formatDuration(totalSpanMs * 0.25)})
-          </span>
-          <span className="absolute left-[50%] -translate-x-1/2">
-            50% ({formatDuration(totalSpanMs * 0.5)})
-          </span>
-          <span className="absolute left-[75%] -translate-x-1/2">
-            75% ({formatDuration(totalSpanMs * 0.75)})
-          </span>
-          <span className="absolute right-4 text-right">
-            100% ({formatDuration(totalSpanMs)})
-          </span>
+    <div className="rounded-lg border border-[#D4E2F4] dark:border-[#172E56] bg-white dark:bg-[#07152E] overflow-hidden">
+      <div className="grid grid-cols-12 border-b border-slate-200 dark:border-[#172E56] bg-slate-50 dark:bg-[#0A1B3B] px-4 py-2.5 text-[11px] font-medium text-slate-600 dark:text-slate-300">
+        <div className="col-span-5">Execution Hierarchy</div>
+        <div className="col-span-7 flex items-center justify-between font-mono tabular-nums">
+          {rulerTicks.map((ratio) => (
+            <span key={ratio}>{formatDurationMs(totalDurationMs * ratio)}</span>
+          ))}
         </div>
       </div>
 
-      {/* Waterfall Rows */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden divide-y divide-slate-800/40">
-        {flattened.map(({ node, depth }) => {
-          const spanKey = node.span_id || node.id;
-          const isSelected =
-            selectedSpanId === spanKey || selectedSpanId === node.id;
-          const isImpacted =
-            impactedSpanIds.includes(spanKey) || impactedSpanIds.includes(node.id);
+      {orderedRows.length === 0 ? (
+        <div className="p-8 text-center text-xs text-slate-500 dark:text-slate-400">
+          No spans recorded for this execution trace.
+        </div>
+      ) : (
+        <div className="divide-y divide-slate-100 dark:divide-[#15284B]">
+          {orderedRows.map(({ node, depth }) => {
+            const startMs = Date.parse(node.started_at);
+            const durMs =
+              node.duration_ms ??
+              (node.ended_at ? Math.max(50, Date.parse(node.ended_at) - startMs) : 300);
 
-          const nodeStart = Date.parse(node.started_at) || traceStartMs;
-          const nodeEnd = node.ended_at
-            ? Date.parse(node.ended_at)
-            : (currentNow || nodeStart);
-          const duration =
-            node.duration_ms ?? Math.max(0, nodeEnd - nodeStart);
+            const offsetPct = Math.max(
+              0,
+              Math.min(98, ((startMs - traceStartMs) / totalDurationMs) * 100),
+            );
+            const widthPct = Math.max(
+              1.5,
+              Math.min(100 - offsetPct, (durMs / totalDurationMs) * 100),
+            );
 
-          const offsetPct = Math.max(
-            0,
-            Math.min(100, ((nodeStart - traceStartMs) / totalSpanMs) * 100)
-          );
-          const rawWidthPct = Math.max(1.2, (duration / totalSpanMs) * 100);
-          const widthPct = Math.min(100 - offsetPct, rawWidthPct);
+            const isSelected =
+              selectedSpanId === node.span_id || selectedSpanId === node.id;
+            const isFailed =
+              node.status === 'FAILED' ||
+              node.status === 'TIMED_OUT' ||
+              impactedSet.has(node.span_id);
 
-          const formattedDuration = formatDuration(duration);
-          const barColorClass = getBarColorClass(node);
+            let barColor = 'bg-[#0096D6]';
+            if (isFailed) barColor = 'bg-red-600';
+            else if (node.status === 'AWAITING_APPROVAL') barColor = 'bg-amber-500';
+            else if (node.status === 'RUNNING') barColor = 'bg-[#00B4F0]';
+            else if (node.status === 'STALLED') barColor = 'bg-violet-600';
+            else if (node.span_type === 'LLM') barColor = 'bg-[#0257D5] dark:bg-[#38BDF8]';
+            else if (node.span_type === 'AGENT') barColor = 'bg-[#041533] dark:bg-[#1D4ED8]';
 
-          return (
-            <div
-              key={spanKey}
-              onClick={() => onSelectSpan(node)}
-              className={cn(
-                'group flex items-center h-9 cursor-pointer transition-colors select-none text-xs font-mono',
-                isSelected
-                  ? 'bg-slate-800/90 ring-1 ring-inset ring-cyan-500/40'
-                  : isImpacted
-                  ? 'bg-rose-950/20 hover:bg-rose-950/40'
-                  : 'hover:bg-slate-900/60'
-              )}
-            >
-              {/* Left Column: Indented Span Info */}
-              <div
-                className="w-80 shrink-0 h-full border-r border-slate-800/80 flex items-center gap-2 pr-3 overflow-hidden"
-                style={{ paddingLeft: `${depth * 18 + 12}px` }}
+            return (
+              <button
+                key={node.span_id}
+                type="button"
+                onClick={() => onSelectSpan(node)}
+                className={cn(
+                  'w-full grid grid-cols-12 items-center px-4 py-2.5 text-left hover:bg-[#F5F9FF] dark:hover:bg-[#0D2247] transition-colors',
+                  isSelected && 'bg-[#EFF6FF] dark:bg-[#0257D5]/20',
+                )}
               >
-                {getSpanTypeIcon(node.span_type)}
-
-                <span
-                  className={cn(
-                    'truncate font-medium transition-colors',
-                    isSelected
-                      ? 'text-cyan-300 font-semibold'
-                      : 'text-slate-200 group-hover:text-white'
-                  )}
-                  title={`${node.operation_name} (${node.agent_id})`}
-                >
-                  {node.operation_name}
-                </span>
-
-                {(node.attempt_number ?? 1) > 1 && (
-                  <span
-                    className="px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 shrink-0"
-                    title={`Attempt #${node.attempt_number}`}
-                  >
-                    #{node.attempt_number}
-                  </span>
-                )}
-
-                {node.is_root_cause && (
-                  <span className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider bg-rose-600 text-white shrink-0 border border-rose-400 shadow-sm shadow-rose-950">
-                    <Flame className="w-2.5 h-2.5 fill-white text-white" />
-                    <span>ROOT CAUSE</span>
-                  </span>
-                )}
-              </div>
-
-              {/* Right Column: Timeline Bar & Duration Label */}
-              <div className="flex-1 relative h-9 flex items-center px-4 overflow-hidden">
-                {/* Background Grid Guidelines */}
-                <div className="absolute inset-y-0 left-[25%] w-px bg-slate-800/30 pointer-events-none" />
-                <div className="absolute inset-y-0 left-[50%] w-px bg-slate-800/30 pointer-events-none" />
-                <div className="absolute inset-y-0 left-[75%] w-px bg-slate-800/30 pointer-events-none" />
-
-                {/* Horizontal Latency Bar */}
                 <div
-                  className={cn(
-                    'absolute h-4 rounded-sm transition-all',
-                    barColorClass,
-                    isSelected && 'ring-2 ring-white/60'
-                  )}
-                  style={{
-                    left: `${offsetPct}%`,
-                    width: `${widthPct}%`,
-                  }}
-                  title={`${node.operation_name}: ${formattedDuration} (status: ${node.status})`}
-                />
-
-                {/* Monospace Duration Label */}
-                <span
-                  className={cn(
-                    'absolute text-[10px] font-mono pointer-events-none whitespace-nowrap transition-colors',
-                    offsetPct + widthPct > 88
-                      ? 'text-right pr-2 text-slate-100 font-semibold drop-shadow-sm'
-                      : 'text-slate-400 group-hover:text-slate-200'
-                  )}
-                  style={
-                    offsetPct + widthPct > 88
-                      ? {
-                          right: `${Math.max(1, 100 - (offsetPct + widthPct))}%`,
-                        }
-                      : {
-                          left: `${offsetPct + widthPct + 0.8}%`,
-                        }
-                  }
+                  className="col-span-5 flex items-center gap-2 min-w-0 pr-3"
+                  style={{ paddingLeft: `${Math.min(depth, 5) * 18}px` }}
                 >
-                  {formattedDuration}
-                </span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+                  <SpanIcon type={node.span_type} />
+                  <span className="text-xs font-medium text-slate-900 dark:text-slate-100 truncate">
+                    {node.operation_name}
+                  </span>
+                  {(node.attempt_number ?? 1) > 1 && (
+                    <span className="font-mono text-[10px] text-amber-800 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/60 rounded px-1 shrink-0">
+                      #{node.attempt_number}
+                    </span>
+                  )}
+                  {node.is_root_cause && (
+                    <span className="rounded bg-red-100 dark:bg-red-950/70 px-1.5 py-0.5 text-[10px] font-semibold text-red-800 dark:text-red-300 shrink-0">
+                      ROOT
+                    </span>
+                  )}
+                </div>
+
+                <div className="col-span-7 relative h-6 flex items-center">
+                  <div className="w-full h-3 rounded-sm bg-slate-100 dark:bg-[#0E2247] relative overflow-hidden">
+                    <div
+                      className={cn('absolute top-0 bottom-0 rounded-sm', barColor)}
+                      style={{ left: `${offsetPct}%`, width: `${widthPct}%` }}
+                    />
+                  </div>
+                  <span
+                    className="ml-2 font-mono text-[11px] tabular-nums text-slate-600 dark:text-slate-300 shrink-0"
+                    style={{ minWidth: '58px', textAlign: 'right' }}
+                  >
+                    {formatDurationMs(durMs)}
+                  </span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

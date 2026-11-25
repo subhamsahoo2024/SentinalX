@@ -15,6 +15,21 @@ const WS_BASE_URL = (
   process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:8000'
 ).replace(/\/+$/, '');
 
+function closeSocketSafely(ws: WebSocket | null) {
+  if (!ws) return;
+  ws.onopen = null;
+  ws.onmessage = null;
+  ws.onerror = null;
+  ws.onclose = null;
+  if (ws.readyState === WebSocket.CONNECTING) {
+    ws.onopen = () => {
+      ws.close(1000, 'Component unmounted');
+    };
+  } else if (ws.readyState === WebSocket.OPEN) {
+    ws.close(1000, 'Component unmounted');
+  }
+}
+
 export function useWebSocketStream<T = unknown>(
   path: string,
   onMessage?: (msg: T) => void
@@ -23,7 +38,8 @@ export function useWebSocketStream<T = unknown>(
   const [lastMessage, setLastMessage] = useState<T | null>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const connectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backoffRef = useRef<number>(1000);
   const isMountedRef = useRef<boolean>(true);
   const onMessageRef = useRef(onMessage);
@@ -42,11 +58,7 @@ export function useWebSocketStream<T = unknown>(
       reconnectTimeoutRef.current = null;
     }
     if (socketRef.current) {
-      socketRef.current.onopen = null;
-      socketRef.current.onclose = null;
-      socketRef.current.onerror = null;
-      socketRef.current.onmessage = null;
-      socketRef.current.close();
+      closeSocketSafely(socketRef.current);
       socketRef.current = null;
     }
 
@@ -61,7 +73,7 @@ export function useWebSocketStream<T = unknown>(
 
       ws.onopen = () => {
         if (!isMountedRef.current) {
-          ws.close();
+          ws.close(1000, 'Component unmounted');
           return;
         }
         setStatus('connected');
@@ -80,6 +92,7 @@ export function useWebSocketStream<T = unknown>(
       };
 
       ws.onerror = (err) => {
+        if (!isMountedRef.current) return;
         console.warn(`WebSocket error on ${targetUrl}:`, err);
       };
 
@@ -120,16 +133,28 @@ export function useWebSocketStream<T = unknown>(
 
   useEffect(() => {
     isMountedRef.current = true;
-    connect();
+
+    // Defer initial connection by one macrotask so React StrictMode's
+    // immediate mount -> unmount -> remount cycle doesn't abort a CONNECTING socket.
+    connectTimerRef.current = setTimeout(() => {
+      connectTimerRef.current = null;
+      if (isMountedRef.current) {
+        connect();
+      }
+    }, 0);
 
     return () => {
       isMountedRef.current = false;
+      if (connectTimerRef.current) {
+        clearTimeout(connectTimerRef.current);
+        connectTimerRef.current = null;
+      }
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
         reconnectTimeoutRef.current = null;
       }
       if (socketRef.current) {
-        socketRef.current.close(1000, 'Component unmounted');
+        closeSocketSafely(socketRef.current);
         socketRef.current = null;
       }
     };

@@ -1,25 +1,28 @@
 import type { Metadata } from 'next';
-import { Suspense } from 'react';
-import { Geist, Geist_Mono } from 'next/font/google';
 import './globals.css';
-import { Sidebar } from '@/components/Sidebar';
-import { Header } from '@/components/Header';
+import { AppShell } from '@/components/AppShell';
 import { ApprovalProvider } from '@/components/governance/ApprovalContext';
-import { ApprovalModal } from '@/components/governance/ApprovalModal';
-
-const geistSans = Geist({
-  variable: '--font-geist-sans',
-  subsets: ['latin'],
-});
-
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
-  subsets: ['latin'],
-});
+import { ASSETS } from '@/lib/assets';
 
 export const metadata: Metadata = {
-  title: 'SentinelX - AI Agent Observability & Control Tower',
-  description: 'Real-time AI agent fleet monitoring, lineage tracing, and cost attribution.',
+  title: 'Sentinel-X Control Tower',
+  description:
+    'Framework-neutral observability, lineage tracing, and runtime governance control tower for multi-agent AI systems.',
+  icons: {
+    icon: ASSETS.logoLight,
+  },
+  openGraph: {
+    title: 'Sentinel-X Control Tower',
+    description:
+      'Framework-neutral observability, lineage tracing, and runtime governance control tower for multi-agent AI systems.',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Sentinel-X Control Tower',
+    description:
+      'Framework-neutral observability, lineage tracing, and runtime governance control tower for multi-agent AI systems.',
+  },
 };
 
 export default function RootLayout({
@@ -28,27 +31,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full dark`}
-    >
-      <body className="h-full bg-slate-950 text-slate-100 flex overflow-hidden antialiased font-sans">
+    <html lang="en" suppressHydrationWarning>
+      <body
+        suppressHydrationWarning
+        className="bg-[#F5F9FF] text-[#061838] dark:bg-[#030A17] dark:text-slate-100 transition-colors duration-150"
+      >
         <ApprovalProvider>
-          <Suspense fallback={<aside className="w-64 border-r border-slate-800 bg-slate-900/70 shrink-0" />}>
-            <Sidebar />
-          </Suspense>
-          <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
-            {/* Top header bar renders <LaunchScenarioModal />, <LiveConnectionBadge />, and <UserSessionMenu /> */}
-            <Suspense fallback={<header className="relative z-40 h-16 border-b border-slate-800 bg-slate-900/40 shrink-0" />}>
-              <Header />
-            </Suspense>
-            <main className="flex-1 overflow-y-auto bg-slate-950">
-              <Suspense fallback={<div className="p-8 text-slate-400 font-mono text-sm">Loading...</div>}>
-                {children}
-              </Suspense>
-            </main>
-          </div>
-          <ApprovalModal />
+          <AppShell>{children}</AppShell>
         </ApprovalProvider>
       </body>
     </html>

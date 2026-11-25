@@ -16,6 +16,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import dagre from '@dagrejs/dagre';
 import { Network } from 'lucide-react';
+import { useTheme } from '@/hooks/use-theme';
 import { LineageGraphDTO, LineageNodeDTO } from '@/types/telemetry';
 import { SpanNode, type SpanNodeType } from './SpanNode';
 
@@ -36,6 +37,7 @@ interface LineageGraphProps {
 function getLayoutedElements(
   nodes: LineageNodeDTO[],
   edges: LineageGraphDTO['edges'],
+  isDark: boolean,
   selectedSpanId?: string | null,
   impactedSpanIds?: string[]
 ): { flowNodes: SpanNodeType[]; flowEdges: Edge[] } {
@@ -58,7 +60,9 @@ function getLayoutedElements(
   });
 
   edges.forEach((edge) => {
-    dagreGraph.setEdge(edge.source, edge.target);
+    if (nodeMap.has(edge.source) && nodeMap.has(edge.target)) {
+      dagreGraph.setEdge(edge.source, edge.target);
+    }
   });
 
   dagre.layout(dagreGraph);
@@ -73,7 +77,7 @@ function getLayoutedElements(
       type: 'spanNode',
       position: { x, y },
       data: node,
-      selected: node.id === selectedSpanId,
+      selected: node.id === selectedSpanId || node.span_id === selectedSpanId,
       width: NODE_WIDTH,
       height: NODE_HEIGHT,
       initialWidth: NODE_WIDTH,
@@ -103,25 +107,25 @@ function getLayoutedElements(
     const isStalled =
       targetNode?.status === 'STALLED' || sourceNode?.status === 'STALLED';
 
-    let strokeColor = '#475569'; // slate-600
+    let strokeColor = isDark ? '#475569' : '#94a3b8';
     let animated = false;
     let strokeWidth = isFailed || isRunning ? 2 : 1.5;
 
     if (isBlastRadius) {
-      strokeColor = '#f43f5e'; // thick animated crimson stroke
+      strokeColor = isDark ? '#f43f5e' : '#e11d48';
       strokeWidth = 2.5;
       animated = true;
     } else if (isFailed) {
-      strokeColor = '#f43f5e'; // crimson / rose-500
+      strokeColor = isDark ? '#f43f5e' : '#e11d48';
       strokeWidth = 2;
     } else if (isRunning) {
-      strokeColor = '#38bdf8'; // sky-400
+      strokeColor = isDark ? '#38bdf8' : '#0284c7';
       animated = true;
     } else if (isAwaiting) {
-      strokeColor = '#f59e0b'; // amber-500
+      strokeColor = isDark ? '#f59e0b' : '#d97706';
       animated = true;
     } else if (isStalled) {
-      strokeColor = '#a855f7'; // purple-500
+      strokeColor = isDark ? '#a855f7' : '#9333ea';
       strokeWidth = 2;
     }
 
@@ -153,15 +157,18 @@ export function LineageGraph({
   onSelectSpan,
   impactedSpanIds,
 }: LineageGraphProps) {
+  const { isDark } = useTheme();
+
   const { flowNodes, flowEdges } = useMemo(
     () =>
       getLayoutedElements(
         graph.nodes,
         graph.edges,
+        isDark,
         selectedSpanId,
         impactedSpanIds
       ),
-    [graph.nodes, graph.edges, selectedSpanId, impactedSpanIds]
+    [graph.nodes, graph.edges, isDark, selectedSpanId, impactedSpanIds]
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState<SpanNodeType>(flowNodes);
@@ -185,10 +192,10 @@ export function LineageGraph({
 
   if (graph.nodes.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full w-full bg-slate-950/90 text-slate-500 font-mono text-sm border border-slate-900 rounded-xl">
-        <Network className="w-10 h-10 mb-3 text-slate-700 animate-pulse" />
-        <span className="text-slate-400 font-medium">No spans recorded yet</span>
-        <span className="text-xs text-slate-600 mt-1">
+      <div className="flex flex-col items-center justify-center h-[560px] w-full bg-[#F5F9FF] dark:bg-slate-950/90 text-slate-500 font-mono text-sm border border-[#D4E2F4] dark:border-slate-900 rounded-xl">
+        <Network className="w-10 h-10 mb-3 text-slate-400 dark:text-slate-700 animate-pulse" />
+        <span className="text-slate-700 dark:text-slate-400 font-medium">No spans recorded yet</span>
+        <span className="text-xs text-slate-500 dark:text-slate-600 mt-1">
           Awaiting telemetry events for run {graph.run_id}...
         </span>
       </div>
@@ -196,7 +203,7 @@ export function LineageGraph({
   }
 
   return (
-    <div className="w-full h-full relative bg-slate-950 rounded-xl overflow-hidden border border-slate-900">
+    <div className="w-full h-[560px] relative bg-[#F5F9FF] dark:bg-slate-950 rounded-xl overflow-hidden border border-[#D4E2F4] dark:border-slate-900">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -211,19 +218,19 @@ export function LineageGraph({
         maxZoom={2.0}
         proOptions={{ hideAttribution: true }}
       >
-        <Background color="#334155" gap={20} size={1} />
-        <Controls className="!bg-slate-900/95 !border-slate-800 !text-slate-300 [&>button]:!border-slate-800 [&>button]:!bg-slate-900 [&>button:hover]:!bg-slate-800 [&>button]:!text-slate-300" />
+        <Background color={isDark ? '#334155' : '#cbd5e1'} gap={20} size={1} />
+        <Controls className="!bg-white/95 !border-[#D4E2F4] !text-slate-700 [&>button]:!border-[#D4E2F4] [&>button]:!bg-white [&>button:hover]:!bg-slate-100 [&>button]:!text-slate-700 dark:!bg-slate-900/95 dark:!border-slate-800 dark:!text-slate-300 dark:[&>button]:!border-slate-800 dark:[&>button]:!bg-slate-900 dark:[&>button:hover]:!bg-slate-800 dark:[&>button]:!text-slate-300" />
         <MiniMap
-          className="!bg-slate-950/90 !border-slate-800 rounded-lg overflow-hidden shadow-2xl"
-          maskColor="rgba(15, 23, 42, 0.7)"
+          className="!bg-white/90 !border-[#D4E2F4] dark:!bg-slate-950/90 dark:!border-slate-800 rounded-lg overflow-hidden shadow-2xl"
+          maskColor={isDark ? 'rgba(15, 23, 42, 0.7)' : 'rgba(241, 245, 249, 0.7)'}
           nodeColor={(n) => {
             const st = (n.data as unknown as LineageNodeDTO)?.status;
             if (st === 'FAILED' || st === 'TIMED_OUT') return '#f43f5e';
-            if (st === 'RUNNING') return '#38bdf8';
+            if (st === 'RUNNING') return isDark ? '#38bdf8' : '#0284c7';
             if (st === 'AWAITING_APPROVAL') return '#f59e0b';
             if (st === 'STALLED') return '#a855f7';
             if (st === 'SUCCEEDED') return '#10b981';
-            return '#64748b';
+            return isDark ? '#64748b' : '#94a3b8';
           }}
         />
       </ReactFlow>

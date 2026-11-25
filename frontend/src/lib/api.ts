@@ -3,6 +3,7 @@ import {
   AgentSloDTO,
   AlertDTO,
   ApprovalDTO,
+  AuditChainVerificationDTO,
   AuditEventDTO,
   CostSummaryDTO,
   FetchRunsParams,
@@ -212,8 +213,9 @@ export async function fetchApprovals(status?: string): Promise<ApprovalDTO[]> {
 export async function submitApprovalDecision(
   approvalId: string,
   decision: 'APPROVED' | 'REJECTED',
-  comment: string,
-  actorRole: string
+  comment: string = '',
+  actorRole: string = 'approver',
+  actorId?: string,
 ): Promise<ApprovalDTO> {
   return apiFetch(
     `/api/approvals/${encodeURIComponent(approvalId)}/decision`,
@@ -223,9 +225,10 @@ export async function submitApprovalDecision(
         'Content-Type': 'application/json',
       },
       actorRole,
+      actorId,
       body: JSON.stringify({
         decision,
-        comment: comment.trim() || null,
+        comment: comment?.trim() || null,
       }),
     }
   );
@@ -243,12 +246,7 @@ export async function fetchAuditEvents(): Promise<AuditEventDTO[]> {
 /**
  * Verify cryptographic SHA-256 hash-chain integrity of all recorded audit events.
  */
-export async function verifyAuditChain(): Promise<{
-  valid: boolean;
-  total_events: number;
-  latest_hash: string;
-  broken_at_audit_id: string | null;
-}> {
+export async function verifyAuditChain(): Promise<AuditChainVerificationDTO> {
   return apiFetch('/api/audit-events/verify', {
     cache: 'no-store',
   });

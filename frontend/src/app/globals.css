@@ -1,26 +1,61 @@
 @import "tailwindcss";
-
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@import "@xyflow/react/dist/style.css";
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@keyframes slideUpFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+.animate-slide-up {
+  animation: slideUpFadeIn 0.18s ease-out forwards;
+}
+
+@layer base {
+  :root {
+    --sentinel-navy: #041533;
+    --sentinel-cobalt: #0257d5;
+    --sentinel-cyan: #00c2ff;
+    --sentinel-surface: #f5f9ff;
+    --sentinel-border: #d4e2f4;
+  }
+
+  html,
+  body {
+    height: 100%;
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .dark .react-flow__controls {
+    border: 1px solid #172e56;
+    box-shadow: none;
+  }
+
+  .dark .react-flow__controls-button {
+    background-color: #07152e;
+    border-bottom: 1px solid #172e56;
+    color: #cbd5e1;
+    fill: #cbd5e1;
+  }
+
+  .dark .react-flow__controls-button:hover {
+    background-color: #0d2247;
+  }
+
+  .dark .react-flow__minimap {
+    background-color: #07152e;
+    border: 1px solid #172e56;
+  }
 }

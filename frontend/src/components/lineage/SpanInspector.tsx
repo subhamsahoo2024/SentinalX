@@ -1,21 +1,15 @@
 'use client';
 
 import { useState } from 'react';
+import { AlertTriangle, Check, Copy, X } from 'lucide-react';
+import { StatusBadge } from '@/components/StatusBadge';
 import {
-  X,
-  Copy,
-  Check,
-  AlertTriangle,
-  Bot,
-  Cpu,
-  Wrench,
-  ShieldAlert,
-  Clock,
-  Coins,
-  DollarSign,
-} from 'lucide-react';
-import { cn } from '@/lib/cn';
-import { LineageNodeDTO } from '@/types/telemetry';
+  formatDurationMs,
+  formatTokens,
+  formatUsd,
+  formatUtcTimestamp,
+} from '@/lib/format';
+import type { LineageNodeDTO } from '@/types/telemetry';
 
 interface SpanInspectorProps {
   span: LineageNodeDTO | null;
@@ -23,267 +17,216 @@ interface SpanInspectorProps {
   onClose: () => void;
 }
 
+function CopyableId({ label, value }: { label: string; value?: string | null }) {
+  const [copied, setCopied] = useState(false);
+
+  if (!value) {
+    return (
+      <div>
+        <p className="text-[11px] text-slate-500 dark:text-slate-400">{label}</p>
+        <p className="mt-0.5 font-mono text-xs text-slate-400 dark:text-slate-500">—</p>
+      </div>
+    );
+  }
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // ignore
+    }
+  };
+
+  return (
+    <div>
+      <p className="text-[11px] text-slate-500 dark:text-slate-400">{label}</p>
+      <button
+        type="button"
+        onClick={() => void copy()}
+        className="mt-0.5 inline-flex items-center gap-1.5 font-mono text-xs text-slate-900 dark:text-slate-100 hover:text-[#0257D5] dark:hover:text-[#00C2FF] text-left break-all"
+        title={`Copy ${label}`}
+      >
+        <span>{value}</span>
+        {copied ? (
+          <Check className="h-3 w-3 text-emerald-600 dark:text-emerald-400 shrink-0" aria-hidden="true" />
+        ) : (
+          <Copy className="h-3 w-3 text-slate-400 shrink-0" aria-hidden="true" />
+        )}
+      </button>
+    </div>
+  );
+}
+
 export function SpanInspector({ span, traceId, onClose }: SpanInspectorProps) {
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [copiedJson, setCopiedJson] = useState(false);
 
   if (!span) return null;
 
-  const copyToClipboard = (text: string, key: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedKey(key);
-    setTimeout(() => setCopiedKey(null), 2000);
+  const totalTokens = (span.input_tokens ?? 0) + (span.output_tokens ?? 0);
+  const rawPayload = JSON.stringify(span.attributes ?? {}, null, 2);
+
+  const handleCopyJson = async () => {
+    try {
+      await navigator.clipboard.writeText(rawPayload);
+      setCopiedJson(true);
+      setTimeout(() => setCopiedJson(false), 1500);
+    } catch {
+      // ignore
+    }
   };
 
-  const totalTokens = (span.input_tokens || 0) + (span.output_tokens || 0);
-
-  let IconComponent = Bot;
-  if (span.span_type === 'LLM') IconComponent = Cpu;
-  else if (span.span_type === 'TOOL') IconComponent = Wrench;
-  else if (span.span_type === 'APPROVAL') IconComponent = ShieldAlert;
-
-  const isFailed = span.status === 'FAILED' || span.status === 'TIMED_OUT';
-
   return (
-    <div className="fixed inset-y-0 right-0 z-40 w-full sm:w-[500px] bg-slate-900/98 border-l border-slate-800 shadow-2xl flex flex-col backdrop-blur-md animate-in slide-in-from-right duration-200">
-      {/* Header */}
-      <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/80">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="p-2 rounded-lg bg-slate-800/80 border border-slate-700/60 text-slate-300 shrink-0">
-            <IconComponent className="w-4 h-4" />
+    <aside
+      aria-label="Span Inspector"
+      className="fixed inset-y-0 right-0 z-30 w-full max-w-md border-l border-[#D4E2F4] dark:border-[#172E56] bg-white dark:bg-[#07152E] shadow-xl flex flex-col"
+    >
+      <div className="flex items-start justify-between gap-3 border-b border-slate-200 dark:border-[#172E56] px-5 py-4">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
+              {span.operation_name}
+            </h2>
+            {(span.attempt_number ?? 1) > 1 && (
+              <span className="font-mono text-xs text-amber-800 dark:text-amber-300 bg-amber-100 dark:bg-amber-950/60 rounded px-1.5 py-0.5">
+                Attempt #{span.attempt_number}
+              </span>
+            )}
           </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold text-slate-100 truncate">
-                {span.operation_name}
-              </h3>
-              {span.attempt_number && span.attempt_number > 1 && (
-                <span className="px-1.5 py-0.2 text-[10px] font-mono font-medium rounded bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                  Attempt #{span.attempt_number}
-                </span>
-              )}
-            </div>
-            <p className="text-[11px] font-mono text-slate-400 mt-0.5">
-              {span.span_type} · {span.agent_id}
-            </p>
-          </div>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 font-mono">
+            {span.span_type} · {span.agent_id}
+          </p>
         </div>
 
         <button
+          type="button"
           onClick={onClose}
-          className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors"
-          title="Close Inspector"
+          className="rounded-md p-1.5 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-[#0D2247]"
+          aria-label="Close span inspector"
         >
-          <X className="w-4 h-4" />
+          <X className="h-4 w-4" />
         </button>
       </div>
 
-      {/* Scrollable Content */}
-      <div className="flex-1 overflow-y-auto p-5 space-y-5 text-sm">
-        {/* Error Banner */}
-        {(isFailed || span.error_class || span.error_message) && (
-          <div className="p-3.5 rounded-lg bg-rose-950/40 border border-rose-500/40 text-rose-300">
-            <div className="flex items-center gap-2 font-semibold text-xs tracking-wide uppercase text-rose-200">
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-              <span>{span.error_class || 'Span Execution Error'}</span>
+      <div className="flex-1 overflow-y-auto p-5 space-y-5">
+        {span.is_root_cause && (
+          <div className="rounded-md border border-red-300 dark:border-red-800 bg-red-50 dark:bg-red-950/50 p-3 text-xs text-red-900 dark:text-red-200 flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 text-red-700 dark:text-red-400 shrink-0 mt-0.5" aria-hidden="true" />
+            <div>
+              <p className="font-semibold">Identified Root Cause Span</p>
+              <p className="mt-0.5 text-red-800 dark:text-red-300">
+                Failure propagation originated at this span and impacted downstream nodes.
+              </p>
             </div>
+          </div>
+        )}
+
+        {(span.error_class || span.error_message) && (
+          <div className="rounded-md border border-red-200 dark:border-red-800/80 bg-red-50/70 dark:bg-red-950/40 p-3 text-xs">
+            <p className="font-mono font-semibold text-red-900 dark:text-red-300">
+              {span.error_class || 'ExecutionError'}
+            </p>
             {span.error_message && (
-              <p className="mt-1.5 text-xs text-rose-300 font-mono break-words leading-relaxed">
+              <p className="mt-1 text-red-800 dark:text-red-200 leading-relaxed">
                 {span.error_message}
               </p>
             )}
           </div>
         )}
 
-        {/* Root Cause Banner */}
-        {span.is_root_cause && (
-          <div className="p-3 rounded-lg bg-rose-950/60 border border-rose-600/60 text-rose-200 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider">
-            <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
-            Deterministic Anomaly Root Cause Identified
-          </div>
-        )}
-
-        {/* Identity & References */}
-        <div className="space-y-2.5">
-          <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-            Identifiers
-          </h4>
-          <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800/80 space-y-2 font-mono text-xs">
-            <div className="flex items-center justify-between">
-              <span className="text-slate-500">Span ID</span>
-              <button
-                onClick={() => copyToClipboard(span.span_id, 'span_id')}
-                className="flex items-center gap-1.5 text-slate-200 hover:text-cyan-400 transition-colors"
-              >
-                <span>{span.span_id}</span>
-                {copiedKey === 'span_id' ? (
-                  <Check className="w-3 h-3 text-emerald-400" />
-                ) : (
-                  <Copy className="w-3 h-3 text-slate-500" />
-                )}
-              </button>
-            </div>
-
-            <div className="flex items-center justify-between">
-              <span className="text-slate-500">Parent Span</span>
-              <span className="text-slate-300">
-                {span.parent_span_id || 'root (null)'}
-              </span>
-            </div>
-
-            {traceId && (
-              <div className="flex items-center justify-between">
-                <span className="text-slate-500">Trace ID</span>
-                <button
-                  onClick={() => copyToClipboard(traceId, 'trace_id')}
-                  className="flex items-center gap-1.5 text-slate-200 hover:text-cyan-400 transition-colors"
-                >
-                  <span className="truncate max-w-[180px]">{traceId}</span>
-                  {copiedKey === 'trace_id' ? (
-                    <Check className="w-3 h-3 text-emerald-400" />
-                  ) : (
-                    <Copy className="w-3 h-3 text-slate-500" />
-                  )}
-                </button>
-              </div>
-            )}
-
-            <div className="flex items-center justify-between pt-1 border-t border-slate-900">
-              <span className="text-slate-500">Status</span>
-              <span
-                className={cn(
-                  'px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider',
-                  span.status === 'SUCCEEDED' && 'bg-emerald-500/20 text-emerald-300',
-                  span.status === 'RUNNING' && 'bg-sky-500/20 text-sky-300',
-                  span.status === 'AWAITING_APPROVAL' && 'bg-amber-500/20 text-amber-300',
-                  (span.status === 'FAILED' || span.status === 'TIMED_OUT') &&
-                    'bg-rose-500/20 text-rose-300'
-                )}
-              >
-                {span.status}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Execution Timing */}
-        <div className="space-y-2.5">
-          <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wider">
-            <Clock className="w-3.5 h-3.5 text-slate-400" />
-            <span>Execution Timing</span>
-          </div>
-          <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-            <div className="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800/80">
-              <span className="text-slate-500 block text-[10px] uppercase">Duration</span>
-              <span className="text-slate-200 font-semibold text-sm mt-0.5 block">
-                {span.duration_ms !== null && span.duration_ms !== undefined
-                  ? span.duration_ms < 1000
-                    ? `${Math.round(span.duration_ms)}ms`
-                    : `${(span.duration_ms / 1000).toFixed(2)}s`
-                  : 'In progress'}
-              </span>
-            </div>
-            <div className="p-2.5 rounded-lg bg-slate-950/80 border border-slate-800/80">
-              <span className="text-slate-500 block text-[10px] uppercase">Started At</span>
-              <span className="text-slate-300 text-xs mt-0.5 block truncate">
-                {span.started_at ? new Date(span.started_at).toLocaleTimeString() : '—'}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Model, Tokens & Cost */}
-        <div className="space-y-2.5">
-          <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wider">
-            <Coins className="w-3.5 h-3.5 text-slate-400" />
-            <span>Model & Resource Metrics</span>
-          </div>
-          <div className="p-3 rounded-lg bg-slate-950/80 border border-slate-800/80 space-y-2 text-xs">
-            {(span.model_provider || span.model_name) && (
-              <div className="flex items-center justify-between font-mono">
-                <span className="text-slate-500">Model</span>
-                <span className="text-slate-200 font-medium">
-                  {span.model_provider ? `${span.model_provider}/` : ''}
-                  {span.model_name || 'custom'}
-                </span>
-              </div>
-            )}
-
-            <div className="flex items-center justify-between font-mono">
-              <span className="text-slate-500">Input Tokens</span>
-              <span className="text-slate-300">
-                {(span.input_tokens || 0).toLocaleString()}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between font-mono">
-              <span className="text-slate-500">Output Tokens</span>
-              <span className="text-slate-300">
-                {(span.output_tokens || 0).toLocaleString()}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between font-mono pt-1.5 border-t border-slate-900">
-              <span className="text-slate-400 font-medium">Total Tokens</span>
-              <span className="text-slate-100 font-bold">
-                {totalTokens.toLocaleString()}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between font-mono pt-1.5 border-t border-slate-900">
-              <span className="text-slate-500 flex items-center gap-1">
-                <DollarSign className="w-3 h-3 text-slate-500" />
-                Cost Attribution
-              </span>
-              <span className="text-slate-200">
-                {span.direct_cost_usd !== null && span.direct_cost_usd !== undefined
-                  ? `$${span.direct_cost_usd.toFixed(6)}`
-                  : 'Unknown'}
-                <span className="text-slate-500 text-[10px] ml-1">
-                  ({span.cost_basis || 'UNKNOWN'})
-                </span>
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Attributes (Inputs / Outputs / Metadata) */}
-        <div className="space-y-2.5">
+        <section className="space-y-3 border-b border-slate-200 dark:border-[#172E56] pb-4">
           <div className="flex items-center justify-between">
-            <h4 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              Attributes & Payloads
-            </h4>
-            {span.attributes && Object.keys(span.attributes).length > 0 && (
-              <button
-                onClick={() =>
-                  copyToClipboard(
-                    JSON.stringify(span.attributes, null, 2),
-                    'attributes'
-                  )
-                }
-                className="text-xs font-mono text-slate-400 hover:text-cyan-400 flex items-center gap-1 transition-colors"
-              >
-                {copiedKey === 'attributes' ? (
-                  <Check className="w-3 h-3 text-emerald-400" />
-                ) : (
-                  <Copy className="w-3 h-3" />
-                )}
-                Copy JSON
-              </button>
-            )}
+            <h3 className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+              Trace Identifiers
+            </h3>
+            <StatusBadge status={String(span.status)} compact />
           </div>
+          <div className="grid grid-cols-1 gap-2.5">
+            <CopyableId label="Span ID" value={span.span_id} />
+            <CopyableId label="Parent Span ID" value={span.parent_span_id} />
+            <CopyableId label="Trace ID" value={traceId} />
+          </div>
+        </section>
 
-          {span.attributes && Object.keys(span.attributes).length > 0 ? (
-            <pre className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-xs font-mono text-slate-300 overflow-x-auto max-h-96 leading-relaxed selection:bg-cyan-900">
-              {JSON.stringify(span.attributes, null, 2)}
-            </pre>
-          ) : (
-            <div className="p-4 rounded-lg bg-slate-950/60 border border-slate-800/60 text-slate-500 text-xs font-mono text-center">
-              No payload attributes recorded for this span.
+        <section className="grid grid-cols-2 gap-4 border-b border-slate-200 dark:border-[#172E56] pb-4 text-xs">
+          <div>
+            <p className="text-slate-500 dark:text-slate-400">Duration</p>
+            <p className="mt-0.5 font-mono font-semibold tabular-nums text-slate-900 dark:text-slate-100">
+              {formatDurationMs(span.duration_ms)}
+            </p>
+          </div>
+          <div>
+            <p className="text-slate-500 dark:text-slate-400">Started At</p>
+            <p className="mt-0.5 font-mono text-slate-900 dark:text-slate-100">
+              {formatUtcTimestamp(span.started_at)}
+            </p>
+          </div>
+        </section>
+
+        <section className="space-y-3 border-b border-slate-200 dark:border-[#172E56] pb-4 text-xs">
+          <h3 className="font-semibold text-slate-700 dark:text-slate-300">
+            Model & Resource Attribution
+          </h3>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <p className="text-slate-500 dark:text-slate-400">Model</p>
+              <p className="mt-0.5 font-mono text-slate-900 dark:text-slate-100">
+                {span.model_provider && span.model_name
+                  ? `${span.model_provider}/${span.model_name}`
+                  : '—'}
+              </p>
             </div>
-          )}
-        </div>
+            <div>
+              <p className="text-slate-500 dark:text-slate-400">Cost Basis</p>
+              <p className="mt-0.5 font-mono text-slate-900 dark:text-slate-100">
+                {span.cost_basis || 'UNKNOWN'}
+              </p>
+            </div>
+            <div>
+              <p className="text-slate-500 dark:text-slate-400">Tokens (In / Out / Total)</p>
+              <p className="mt-0.5 font-mono tabular-nums text-slate-900 dark:text-slate-100">
+                {formatTokens(span.input_tokens)} / {formatTokens(span.output_tokens)} /{' '}
+                {formatTokens(totalTokens)}
+              </p>
+            </div>
+            <div>
+              <p className="text-slate-500 dark:text-slate-400">Direct / Subtree Spend</p>
+              <p className="mt-0.5 font-mono font-semibold tabular-nums text-slate-900 dark:text-slate-100">
+                {formatUsd(span.direct_cost_usd)} / {formatUsd(span.rolled_up_cost_usd)}
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section className="space-y-2">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+              Attributes & Payloads
+            </h3>
+            <button
+              type="button"
+              onClick={() => void handleCopyJson()}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-[#0257D5] dark:text-[#38BDF8] hover:underline"
+            >
+              {copiedJson ? (
+                <>
+                  <Check className="h-3 w-3" aria-hidden="true" />
+                  <span>Copied</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="h-3 w-3" aria-hidden="true" />
+                  <span>Copy JSON</span>
+                </>
+              )}
+            </button>
+          </div>
+          <pre className="max-h-60 overflow-auto rounded-md border border-slate-200 dark:border-[#172E56] bg-[#040B18] p-3 text-[11px] font-mono text-slate-100">
+            {rawPayload}
+          </pre>
+        </section>
       </div>
-    </div>
+    </aside>
   );
 }
-

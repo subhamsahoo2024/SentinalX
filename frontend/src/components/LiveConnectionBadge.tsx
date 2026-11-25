@@ -1,41 +1,44 @@
 'use client';
 
 import { useWebSocketStream, type WebSocketConnectionStatus } from '@/hooks/useWebSocketStream';
-import { Radio } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 interface LiveConnectionBadgeProps {
   status?: WebSocketConnectionStatus;
 }
 
-export function LiveConnectionBadge({ status: propStatus }: LiveConnectionBadgeProps) {
-  const { status: fleetStatus } = useWebSocketStream('/ws/fleet');
-  const activeStatus = propStatus ?? fleetStatus;
+function StreamConnectionBadge() {
+  const { status } = useWebSocketStream('/ws/fleet');
+  return <BadgeView status={status} />;
+}
 
-  const isConnected = activeStatus === 'connected';
-
+function BadgeView({ status }: { status: WebSocketConnectionStatus }) {
+  const isConnected = status === 'connected';
   return (
     <div
-      className={`inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-mono font-medium border transition-colors ${
+      className={cn(
+        'inline-flex items-center gap-2 rounded-md border px-2.5 py-1 text-xs font-medium whitespace-nowrap shrink-0 tabular-nums',
         isConnected
-          ? 'bg-emerald-950/50 border-emerald-500/30 text-emerald-400'
-          : 'bg-amber-950/50 border-amber-500/30 text-amber-400'
-      }`}
-      title={isConnected ? 'Connected to SentinelX PubSub' : 'Reconnecting to SentinelX PubSub'}
+          ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800/80 dark:bg-emerald-950/60 dark:text-emerald-300'
+          : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800/80 dark:bg-amber-950/60 dark:text-amber-300',
+      )}
+      title={isConnected ? 'Telemetry stream connected' : 'Reconnecting to telemetry stream'}
     >
-      <span className="relative flex h-2 w-2">
-        <span
-          className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-            isConnected ? 'bg-emerald-400' : 'bg-amber-400'
-          }`}
-        />
-        <span
-          className={`relative inline-flex rounded-full h-2 w-2 ${
-            isConnected ? 'bg-emerald-500' : 'bg-amber-500'
-          }`}
-        />
-      </span>
-      <Radio className="w-3.5 h-3.5" />
+      <span
+        className={cn(
+          'h-2 w-2 rounded-full',
+          isConnected ? 'bg-emerald-600 dark:bg-emerald-400' : 'bg-amber-500 animate-pulse',
+        )}
+        aria-hidden="true"
+      />
       <span>{isConnected ? 'LIVE' : 'RECONNECTING'}</span>
     </div>
   );
+}
+
+export function LiveConnectionBadge({ status }: LiveConnectionBadgeProps) {
+  if (status !== undefined) {
+    return <BadgeView status={status} />;
+  }
+  return <StreamConnectionBadge />;
 }

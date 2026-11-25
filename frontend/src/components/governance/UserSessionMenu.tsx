@@ -1,321 +1,229 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { ChevronDown, LogOut, ShieldCheck, UserCheck } from 'lucide-react';
 import {
-  ChevronDown,
-  KeyRound,
-  LogOut,
-  Shield,
-  ShieldAlert,
-  User,
-  UserCheck,
-} from 'lucide-react';
-import {
-  clearAuthSession,
+  AUTH_CHANGED_EVENT,
+  DEMO_ACCOUNTS,
   getStoredUser,
   loginWithCredentials,
-  SentinelUser,
+  signOutUser,
+  USER_KEY,
 } from '@/lib/auth';
+import { cn } from '@/lib/utils';
+import type { SentinelUser } from '@/types/telemetry';
 
-const DEMO_ACCOUNTS = [
-  {
-    email: 'approver@sentinel.local',
-    name: 'Arjun Mehta',
-    role: 'approver',
-    badge: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
-  },
-  {
-    email: 'admin@sentinel.local',
-    name: 'Priya Nair',
-    role: 'admin',
-    badge: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
-  },
-  {
-    email: 'operator@sentinel.local',
-    name: 'Devika Rao',
-    role: 'operator',
-    badge: 'bg-blue-500/20 text-blue-300 border-blue-500/40',
-  },
-  {
-    email: 'viewer@sentinel.local',
-    name: 'Rohan Das',
-    role: 'viewer',
-    badge: 'bg-slate-800 text-slate-300 border-slate-700',
-  },
-] as const;
+let cachedRaw: string | null = null;
+let cachedUser: SentinelUser | null = null;
 
-export function getRoleBadgeClass(role?: string): string {
-  const norm = (role || '').toLowerCase();
-  switch (norm) {
-    case 'admin':
-      return 'bg-purple-500/20 text-purple-300 border-purple-500/40';
-    case 'approver':
-      return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40';
-    case 'operator':
-      return 'bg-blue-500/20 text-blue-300 border-blue-500/40';
-    case 'viewer':
-    default:
-      return 'bg-slate-800 text-slate-300 border-slate-700';
+function subscribeAuth(callback: () => void) {
+  window.addEventListener(AUTH_CHANGED_EVENT, callback);
+  window.addEventListener('storage', callback);
+  return () => {
+    window.removeEventListener(AUTH_CHANGED_EVENT, callback);
+    window.removeEventListener('storage', callback);
+  };
+}
+
+function getAuthSnapshot(): SentinelUser | null {
+  if (typeof window === 'undefined') return null;
+  const raw = window.localStorage.getItem(USER_KEY) ?? '__default__';
+  if (raw !== cachedRaw) {
+    cachedRaw = raw;
+    cachedUser = getStoredUser();
   }
+  return cachedUser;
 }
 
 export function UserSessionMenu() {
-  const [user, setUser] = useState<SentinelUser | null>(null);
-  const [isOpen, setIsOpen] = useState(false);
-  const [emailInput, setEmailInput] = useState('');
-  const [passwordInput, setPasswordInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const user = useSyncExternalStore(subscribeAuth, getAuthSnapshot, () => null);
+  const [open, setOpen] = useState(false);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  // Sync stored user and listen for cross-tab or in-page auth updates
   useEffect(() => {
-    const syncUser = () => {
-      setUser(getStoredUser());
-    };
-
-    syncUser();
-
-    const handleAuthChange = () => {
-      syncUser();
-    };
-
-    window.addEventListener('sentinel-auth-changed', handleAuthChange);
-    window.addEventListener('storage', handleAuthChange);
-
-    return () => {
-      window.removeEventListener('sentinel-auth-changed', handleAuthChange);
-      window.removeEventListener('storage', handleAuthChange);
-    };
-  }, []);
-
-  // Close on outside click
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
+    if (!open) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
       }
-    }
-
-    if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [isOpen]);
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [open]);
 
-  const handleDemoSwitch = async (email: string) => {
-    setIsLoading(true);
-    setErrorMsg(null);
+  const handleDemoSwitch = async (demoEmail: string) => {
+    setLoading(true);
+    setError(null);
     try {
-      await loginWithCredentials(email, 'sentinel123');
-      setIsOpen(false);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setErrorMsg(msg);
+      await loginWithCredentials(demoEmail, 'sentinel123');
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to switch demo account');
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
-  const handleManualLogin = async (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!emailInput || !passwordInput) return;
-    setIsLoading(true);
-    setErrorMsg(null);
+    if (!email || !password) return;
+    setLoading(true);
+    setError(null);
     try {
-      await loginWithCredentials(emailInput, passwordInput);
-      setEmailInput('');
-      setPasswordInput('');
-      setIsOpen(false);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setErrorMsg(msg);
+      await loginWithCredentials(email, password);
+      setEmail('');
+      setPassword('');
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to sign in');
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
-  };
-
-  const handleSignOut = () => {
-    clearAuthSession();
-    setIsOpen(false);
   };
 
   return (
-    <div className="relative z-50 font-sans" ref={menuRef}>
-      {/* Trigger Button in Header */}
+    <div className="relative" ref={containerRef}>
       <button
         type="button"
-        onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700/80 hover:border-slate-600 text-xs text-slate-200 transition-all shadow-sm focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
+        onClick={() => setOpen((prev) => !prev)}
+        className="inline-flex items-center gap-2 rounded-md border border-[#D4E2F4] dark:border-[#1D3868] bg-white dark:bg-[#0A1B3B] px-3 py-1.5 text-xs font-medium text-[#061838] dark:text-slate-100 hover:bg-[#EFF6FF] dark:hover:bg-[#102650] transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0257D5] dark:focus-visible:ring-[#00C2FF]"
+        aria-expanded={open}
+        aria-haspopup="dialog"
       >
-        <div className="w-5 h-5 rounded-full bg-cyan-950 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
-          {user ? (
-            <UserCheck className="w-3 h-3 text-emerald-400" />
-          ) : (
-            <User className="w-3 h-3 text-slate-400" />
-          )}
-        </div>
-
-        <span className="font-medium text-slate-200 max-w-[130px] truncate">
+        <UserCheck className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
+        <span className="max-w-[140px] truncate">
           {user ? user.display_name : 'Sign In / Demo Role'}
         </span>
-
         {user && (
-          <span
-            className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold uppercase border ${getRoleBadgeClass(
-              user.role
-            )}`}
-          >
+          <span className="text-[11px] font-mono text-slate-500 dark:text-slate-400 border-l border-slate-200 dark:border-[#1D3868] pl-2">
             {user.role}
           </span>
         )}
-
-        <ChevronDown
-          className={`w-3.5 h-3.5 text-slate-400 transition-transform ${
-            isOpen ? 'rotate-180 text-cyan-400' : ''
-          }`}
-        />
+        <ChevronDown className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
       </button>
 
-      {/* Popover Dropdown */}
-      {isOpen && (
-        <div className="absolute right-0 mt-2 w-80 rounded-xl bg-slate-900/95 border border-slate-700 shadow-2xl backdrop-blur-xl z-50 p-4 space-y-4 animate-in fade-in zoom-in-95 duration-100">
-          {/* Active Session Info */}
-          <div className="pb-3 border-b border-slate-800">
-            <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400 mb-1 flex items-center justify-between">
-              <span>Active Governance Session</span>
-              {user ? (
-                <span className="text-emerald-400 font-bold flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  JWT Active
-                </span>
-              ) : (
-                <span className="text-amber-400 font-bold">Dev Headers</span>
-              )}
-            </div>
-
+      {open && (
+        <div
+          role="dialog"
+          aria-label="Session and RBAC Role Switcher"
+          className="absolute right-0 mt-2 w-80 rounded-lg border border-[#D4E2F4] dark:border-[#1D3868] bg-white dark:bg-[#07152E] shadow-lg z-50 p-4"
+        >
+          <div className="pb-3 border-b border-slate-200 dark:border-[#172E56]">
+            <p className="text-xs font-semibold text-slate-900 dark:text-slate-100">Active Session</p>
             {user ? (
-              <div className="bg-slate-950/70 border border-slate-800 rounded-lg p-2.5 space-y-1">
-                <div className="text-xs font-semibold text-slate-100 flex items-center justify-between">
-                  <span>{user.display_name}</span>
-                  <span
-                    className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold uppercase border ${getRoleBadgeClass(
-                      user.role
-                    )}`}
-                  >
-                    {user.role}
-                  </span>
+              <div className="mt-1.5 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-slate-900 dark:text-slate-100 truncate">
+                    {user.display_name}
+                  </p>
+                  <p className="text-xs font-mono text-slate-500 dark:text-slate-400 truncate">
+                    {user.email}
+                  </p>
                 </div>
-                <div className="text-[11px] font-mono text-slate-400 truncate">
-                  {user.email}
-                </div>
+                <span className="rounded border border-[#93C5FD] dark:border-[#00C2FF]/40 bg-[#EFF6FF] dark:bg-[#0257D5]/25 px-2 py-0.5 text-[11px] font-mono font-medium text-[#0257D5] dark:text-[#7DD3FC]">
+                  {user.role}
+                </span>
               </div>
             ) : (
-              <p className="text-xs text-slate-400">
-                Operating with development headers. Switch to a signed JWT account below to enforce real cryptographic RBAC.
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                Operating with dev headers. Select a signed JWT account below.
               </p>
             )}
           </div>
 
-          {/* Quick Demo Switcher */}
-          <div className="space-y-2">
-            <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400 flex items-center gap-1">
-              <Shield className="w-3 h-3 text-cyan-400" />
-              <span>One-Click Demo Accounts</span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-1.5">
-              {DEMO_ACCOUNTS.map((acc) => {
-                const isActive = user?.email.toLowerCase() === acc.email.toLowerCase();
+          <div className="py-3 border-b border-slate-200 dark:border-[#172E56]">
+            <p className="text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2">
+              Quick Role Switch
+            </p>
+            <div className="grid grid-cols-1 gap-1.5">
+              {DEMO_ACCOUNTS.map((acct) => {
+                const isActive = user?.email?.toLowerCase() === acct.email.toLowerCase();
                 return (
                   <button
-                    key={acc.email}
+                    key={acct.user_id}
                     type="button"
-                    disabled={isLoading}
-                    onClick={() => handleDemoSwitch(acc.email)}
-                    className={`text-left p-2 rounded-lg border text-xs transition-all ${
+                    disabled={loading}
+                    onClick={() => void handleDemoSwitch(acct.email)}
+                    className={cn(
+                      'flex items-center justify-between rounded-md border px-2.5 py-2 text-left text-xs transition-colors disabled:opacity-50',
                       isActive
-                        ? 'bg-cyan-950/50 border-cyan-500/60 ring-1 ring-cyan-500/30'
-                        : 'bg-slate-950/60 border-slate-800/80 hover:border-slate-700 hover:bg-slate-800/50'
-                    }`}
+                        ? 'border-[#0257D5]/40 bg-[#EFF6FF] text-[#041533] dark:border-[#00C2FF]/50 dark:bg-[#0257D5]/25 dark:text-white'
+                        : 'border-[#D4E2F4] bg-white text-slate-700 hover:bg-[#F5F9FF] dark:border-[#172E56] dark:bg-[#0A1B3B] dark:text-slate-300 dark:hover:bg-[#102650]',
+                    )}
                   >
-                    <div className="flex items-center justify-between gap-1 mb-0.5">
-                      <span className="font-semibold text-slate-200 truncate text-[11px]">
-                        {acc.name.split(' ')[0]}
-                      </span>
-                      <span
-                        className={`px-1 py-0.1 text-[9px] font-mono font-bold uppercase rounded border ${acc.badge}`}
-                      >
-                        {acc.role}
+                    <div className="min-w-0">
+                      <span className="font-medium block truncate">{acct.display_name}</span>
+                      <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400 block truncate">
+                        {acct.email}
                       </span>
                     </div>
-                    <div className="text-[10px] font-mono text-slate-400 truncate">
-                      {acc.email.split('@')[0]}
-                    </div>
+                    <span className="ml-2 font-mono text-[11px] font-semibold text-slate-600 dark:text-[#7DD3FC] shrink-0">
+                      {acct.role}
+                    </span>
                   </button>
                 );
               })}
             </div>
           </div>
 
-          {/* Manual Login Form */}
-          <form onSubmit={handleManualLogin} className="space-y-2 pt-2 border-t border-slate-800">
-            <div className="text-[10px] font-mono uppercase tracking-wider text-slate-400 flex items-center gap-1">
-              <KeyRound className="w-3 h-3 text-slate-400" />
-              <span>Sign In with Credentials</span>
-            </div>
-
+          <form onSubmit={handleLogin} className="pt-3 space-y-2">
+            <p className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+              <ShieldCheck className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" aria-hidden="true" />
+              <span>Credentials Sign In</span>
+            </p>
             <input
               type="email"
-              value={emailInput}
-              onChange={(e) => setEmailInput(e.target.value)}
-              placeholder="user@sentinel.local"
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500 font-mono"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="operator@sentinel.local"
+              aria-label="Email address"
+              className="w-full rounded-md border border-slate-300 dark:border-[#1D3868] bg-white dark:bg-[#0A1B3B] px-2.5 py-1.5 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-[#0257D5] dark:focus:border-[#00C2FF] focus:outline-none"
             />
-
             <input
               type="password"
-              value={passwordInput}
-              onChange={(e) => setPasswordInput(e.target.value)}
-              placeholder="Password..."
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-500 font-mono"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password"
+              aria-label="Password"
+              className="w-full rounded-md border border-slate-300 dark:border-[#1D3868] bg-white dark:bg-[#0A1B3B] px-2.5 py-1.5 text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-[#0257D5] dark:focus:border-[#00C2FF] focus:outline-none"
             />
-
-            {errorMsg && (
-              <div className="p-2 rounded bg-rose-950/40 border border-rose-500/50 text-[11px] font-mono text-rose-300 flex items-center gap-1.5">
-                <ShieldAlert className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-                <span>{errorMsg}</span>
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={isLoading || !emailInput || !passwordInput}
-              className="w-full py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 text-xs font-semibold text-white transition-colors"
-            >
-              {isLoading ? 'Authenticating...' : 'Sign In'}
-            </button>
-          </form>
-
-          {/* Sign Out Button */}
-          {user && (
-            <div className="pt-2 border-t border-slate-800">
+            {error && <p className="text-[11px] text-red-600 dark:text-red-400">{error}</p>}
+            <div className="flex items-center justify-between gap-2 pt-1">
               <button
-                type="button"
-                onClick={handleSignOut}
-                className="w-full flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-slate-950 hover:bg-rose-950/40 border border-slate-800 hover:border-rose-500/40 text-xs text-slate-300 hover:text-rose-300 transition-colors"
+                type="submit"
+                disabled={loading}
+                className="rounded-md bg-[#041533] dark:bg-[#0257D5] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#0257D5] dark:hover:bg-[#0346B0] disabled:opacity-50 transition-colors whitespace-nowrap"
               >
-                <LogOut className="w-3.5 h-3.5 text-rose-400" />
-                <span>Sign Out</span>
+                {loading ? 'Signing In...' : 'Sign In'}
               </button>
+              {user && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    signOutUser();
+                    setOpen(false);
+                  }}
+                  className="inline-flex items-center gap-1 rounded-md border border-slate-200 dark:border-[#1D3868] px-2.5 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-[#0D2247] transition-colors whitespace-nowrap"
+                >
+                  <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Sign Out</span>
+                </button>
+              )}
             </div>
-          )}
+          </form>
         </div>
       )}
     </div>
   );
 }
-
