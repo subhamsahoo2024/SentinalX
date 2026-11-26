@@ -6,6 +6,7 @@ from sentinel_backend.models.policy import Policy
 from sentinel_backend.models.pricing import PricingVersion
 from sentinel_backend.models.run import Run
 from sentinel_backend.models.span import Span
+from sentinel_backend.models.team import Team
 from sentinel_backend.models.user import UserAccount
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "PricingVersion",
     "Run",
     "Span",
+    "Team",
     "UserAccount",
 ]

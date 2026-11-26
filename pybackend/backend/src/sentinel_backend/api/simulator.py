@@ -89,6 +89,12 @@ async def launch_simulator_scenario(
     actor: Annotated[ActorContext, Depends(get_current_actor)],
 ) -> SimulatorLaunchResponse:
     """Launch a simulated multi-agent chaos or demo scenario in the background."""
+    if not (settings.ENABLE_DEMO_SANDBOX and actor.is_demo):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Simulator is only available in Demo Sandbox mode for demo sessions",
+        )
+
     if actor.actor_role == "viewer":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -96,6 +102,7 @@ async def launch_simulator_scenario(
         )
 
     run_id = f"run_{uuid4().hex[:12]}"
+    team = "demo-sandbox"
 
     env = os.environ.copy()
     env["SENTINEL_URL"] = "http://127.0.0.1:8000"
@@ -113,7 +120,7 @@ async def launch_simulator_scenario(
         "--run-id",
         run_id,
         "--team",
-        body.team,
+        team,
     ]
 
     try:
@@ -146,7 +153,7 @@ async def launch_simulator_scenario(
     return SimulatorLaunchResponse(
         run_id=run_id,
         scenario=body.scenario,
-        team=body.team,
+        team=team,
         status="LAUNCHED",
     )
 

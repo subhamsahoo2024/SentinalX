@@ -1,12 +1,13 @@
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sentinel_backend.config import settings
+from sentinel_backend.models import Team, UserAccount
 from sentinel_backend.models.audit import AuditEvent
-from sentinel_backend.models.user import UserAccount
 from sentinel_backend.schemas.governance import AuditEventDTO
 from sentinel_backend.services.user_seed import (
+    DEFAULT_TEAMS,
     DEFAULT_USERS,
     password_hash_helper,
     seed_default_users,
@@ -21,6 +22,33 @@ def test_auth_settings_defaults():
     assert settings.JWT_EXPIRE_MINUTES == 480
     assert hasattr(settings, "ALLOW_DEV_HEADERS")
     assert settings.ALLOW_DEV_HEADERS is True
+    assert settings.ENABLE_DEMO_SANDBOX is True
+    assert settings.INITIAL_ADMIN_EMAIL is None
+    assert settings.INITIAL_ADMIN_PASSWORD is None
+    assert settings.effective_allow_dev_headers is True
+
+    with patch.object(settings, "ENABLE_DEMO_SANDBOX", False):
+        assert settings.effective_allow_dev_headers is False
+
+    with patch.object(settings, "ALLOW_DEV_HEADERS", False):
+        assert settings.effective_allow_dev_headers is False
+
+
+def test_team_model():
+    now = datetime.now(UTC)
+    team = Team(
+        team_id="fraud-detection",
+        display_name="Fraud Detection",
+        description="Fraud risk scoring agents",
+        created_at=now,
+    )
+    assert team.team_id == "fraud-detection"
+    assert team.display_name == "Fraud Detection"
+    assert team.description == "Fraud risk scoring agents"
+    assert team.created_at == now
+
+    minimal_team = Team(team_id="it-ops", display_name="IT Operations")
+    assert minimal_team.description is None
 
 
 def test_user_account_model():
@@ -38,6 +66,9 @@ def test_user_account_model():
     assert user.display_name == "Arjun Mehta (Approver)"
     assert user.password_hash == "argon2_mock_hash"
     assert user.role == "approver"
+    assert user.allowed_teams == ["*"]
+    assert user.is_active is True
+    assert user.is_demo_account is False
     assert user.created_at == now
 
 
@@ -114,10 +145,27 @@ async def test_seed_default_users_when_empty():
     mock_result.scalar_one_or_none.return_value = None
     mock_db.execute.return_value = mock_result
 
-    added_users: list[UserAccount] = []
-    mock_db.add.side_effect = lambda obj: added_users.append(obj)
+    added_objects: list[object] = []
+    mock_db.add.side_effect = lambda obj: added_objects.append(obj)
 
-    await seed_default_users(mock_db)
+    with (
+        patch.object(settings, "ENABLE_DEMO_SANDBOX", True),
+        patch.object(settings, "INITIAL_ADMIN_EMAIL", None),
+        patch.object(settings, "INITIAL_ADMIN_PASSWORD", None),
+    ):
+        await seed_default_users(mock_db)
+
+    added_teams = [obj for obj in added_objects if isinstance(obj, Team)]
+    added_users = [obj for obj in added_objects if isinstance(obj, UserAccount)]
+
+    assert len(added_teams) == 4
+    assert len(DEFAULT_TEAMS) == 4
+    assert {t.team_id: t.display_name for t in added_teams} == {
+        "it-ops": "IT Operations",
+        "customer-support": "Customer Support",
+        "fraud-detection": "Fraud Detection",
+        "demo-sandbox": "Demo Sandbox",
+    }
 
     assert len(added_users) == 4
     assert len(DEFAULT_USERS) == 4
@@ -140,10 +188,47 @@ async def test_seed_default_users_when_empty():
     assert "usr_operator" in user_ids
     assert "usr_viewer" in user_ids
 
-    # Verify password hash on all accounts verifies with argon2
+    # Verify password hash, demo flag, and sandbox team scope on all demo accounts
     for user in added_users:
         assert password_hash_helper.verify("sentinel123", user.password_hash)
+        assert user.is_demo_account is True
+        assert user.allowed_teams == ["demo-sandbox"]
+        assert user.is_active is True
 
+    mock_db.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_seed_default_users_demo_sandbox_disabled_and_initial_admin():
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = None
+    mock_db.execute.return_value = mock_result
+
+    added_objects: list[object] = []
+    mock_db.add.side_effect = lambda obj: added_objects.append(obj)
+
+    with (
+        patch.object(settings, "ENABLE_DEMO_SANDBOX", False),
+        patch.object(settings, "INITIAL_ADMIN_EMAIL", "Root.Admin@example.com"),
+        patch.object(settings, "INITIAL_ADMIN_PASSWORD", "prod-admin-pass-123"),
+    ):
+        await seed_default_users(mock_db)
+
+    added_teams = [obj for obj in added_objects if isinstance(obj, Team)]
+    added_users = [obj for obj in added_objects if isinstance(obj, UserAccount)]
+
+    assert len(added_teams) == 4
+    assert len(added_users) == 1
+
+    real_admin = added_users[0]
+    assert real_admin.email == "root.admin@example.com"
+    assert real_admin.role == "admin"
+    assert real_admin.allowed_teams == ["*"]
+    assert real_admin.is_demo_account is False
+    assert real_admin.is_active is True
+    assert password_hash_helper.verify("prod-admin-pass-123", real_admin.password_hash)
     mock_db.commit.assert_awaited_once()
 
 
@@ -155,10 +240,15 @@ async def test_seed_default_users_idempotent_when_already_populated():
     mock_result.scalar_one_or_none.return_value = MagicMock(spec=UserAccount)
     mock_db.execute.return_value = mock_result
 
-    added_users: list[UserAccount] = []
-    mock_db.add.side_effect = lambda obj: added_users.append(obj)
+    added_objects: list[object] = []
+    mock_db.add.side_effect = lambda obj: added_objects.append(obj)
 
-    await seed_default_users(mock_db)
+    with (
+        patch.object(settings, "ENABLE_DEMO_SANDBOX", True),
+        patch.object(settings, "INITIAL_ADMIN_EMAIL", "admin@example.com"),
+        patch.object(settings, "INITIAL_ADMIN_PASSWORD", "secret"),
+    ):
+        await seed_default_users(mock_db)
 
-    assert len(added_users) == 0
+    assert len(added_objects) == 0
     mock_db.commit.assert_not_awaited()

@@ -1,5 +1,6 @@
 'use client';
 
+import { useSyncExternalStore } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -9,13 +10,15 @@ import {
   FileText,
   PanelLeftClose,
   ShieldCheck,
+  Users,
 } from 'lucide-react';
 import { useApprovals } from '@/components/governance/ApprovalContext';
 import { useTheme } from '@/hooks/use-theme';
 import { ASSETS } from '@/lib/assets';
+import { getAuthUserSnapshot, subscribeAuth } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 
-const NAV_ITEMS = [
+const BASE_NAV_ITEMS = [
   { href: '/', label: 'Fleet Overview', icon: Activity },
   { href: '/approvals', label: 'Approvals', icon: ShieldCheck, showBadge: true },
   { href: '/costs', label: 'Cost Attribution', icon: DollarSign },
@@ -32,6 +35,23 @@ export function Sidebar({ isOpen, isMobile, onClose }: SidebarProps) {
   const pathname = usePathname();
   const { pendingCount } = useApprovals();
   const { isDark } = useTheme();
+  const user = useSyncExternalStore(
+    subscribeAuth,
+    getAuthUserSnapshot,
+    () => null,
+  );
+
+  if (pathname === '/login') {
+    return null;
+  }
+
+  const navItems =
+    user?.role === 'admin' && !user?.is_demo
+      ? [
+          ...BASE_NAV_ITEMS,
+          { href: '/settings/users', label: 'Users & Teams', icon: Users },
+        ]
+      : BASE_NAV_ITEMS;
 
   const handleNavClick = () => {
     if (isMobile) {
@@ -109,7 +129,7 @@ export function Sidebar({ isOpen, isMobile, onClose }: SidebarProps) {
           </div>
 
           <nav className="flex-1 px-3 py-4 space-y-1" aria-label="Primary Navigation">
-            {NAV_ITEMS.map((item) => {
+            {navItems.map((item) => {
               const isActive =
                 item.href === '/'
                   ? pathname === '/' || pathname.startsWith('/runs')

@@ -3,7 +3,7 @@ from typing import Annotated, Any
 
 import jwt
 from fastapi import Depends, Header, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from sentinel_backend.config import settings
 
@@ -14,6 +14,8 @@ class ActorContext(BaseModel):
     actor_id: str
     actor_role: str
     display_name: str | None = None
+    allowed_teams: list[str] = Field(default_factory=lambda: ["*"])
+    is_demo: bool = False
 
     def __init__(
         self,
@@ -89,8 +91,8 @@ async def get_current_actor(
 
     If an Authorization: Bearer <token> header is provided, cryptographically decodes
     and validates the token with settings.JWT_SECRET (HS256).
-    If no Bearer token is provided and settings.ALLOW_DEV_HEADERS is True, falls back to
-    x_actor_id and x_actor_role.
+    If no Bearer token is provided and settings.effective_allow_dev_headers is True,
+    falls back to x_actor_id and x_actor_role as a demo sandbox actor.
     Otherwise raises 401 Unauthorized.
     """
     raw_auth = authorization if isinstance(authorization, str) else None
@@ -117,13 +119,22 @@ async def get_current_actor(
 
         actor_id = claims.get("email") or claims.get("sub") or "unknown"
         display_name = claims.get("name") or actor_id
+        raw_allowed_teams = claims.get("allowed_teams")
+        allowed_teams = (
+            [str(team) for team in raw_allowed_teams]
+            if isinstance(raw_allowed_teams, list)
+            else ["*"]
+        )
+        is_demo = bool(claims.get("is_demo", False))
         return ActorContext(
             actor_id=actor_id,
             actor_role=actor_role,
             display_name=display_name,
+            allowed_teams=allowed_teams,
+            is_demo=is_demo,
         )
 
-    if settings.ALLOW_DEV_HEADERS:
+    if settings.effective_allow_dev_headers:
         actor_id_val = x_actor_id if isinstance(x_actor_id, str) else "operator-1"
         actor_role_val = x_actor_role if isinstance(x_actor_role, str) else "approver"
         if actor_role_val not in VALID_ACTOR_ROLES:
@@ -138,6 +149,8 @@ async def get_current_actor(
             actor_id=actor_id_val,
             actor_role=actor_role_val,
             display_name=actor_id_val,
+            allowed_teams=["*"],
+            is_demo=True,
         )
 
     raise HTTPException(
@@ -162,10 +175,26 @@ async def require_approver(
     return actor
 
 
+async def require_admin(
+    actor: ActorContext = Depends(get_current_actor),  # noqa: B008
+) -> ActorContext:
+    """Enforces admin role for organization, user, and team management actions.
+
+    Raises 403 Forbidden if the actor is not an admin.
+    """
+    if actor.actor_role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Actor role '{actor.actor_role}' does not have admin privileges",
+        )
+    return actor
+
+
 __all__ = [
     "VALID_ACTOR_ROLES",
     "ActorContext",
     "get_current_actor",
+    "require_admin",
     "require_approver",
     "verify_api_key",
     "verify_ingest_auth",

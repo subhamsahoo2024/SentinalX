@@ -16,7 +16,9 @@ from sentinel_backend.api import (
     policies,
     runs,
     simulator,
+    system,
     telemetry,
+    users,
     ws,
 )
 from sentinel_backend.db.session import async_session_maker, engine
@@ -89,6 +91,8 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 # Mount Routers
 app.include_router(telemetry.router)
 app.include_router(auth.router)
+app.include_router(system.router)
+app.include_router(users.router)
 app.include_router(agents.router)
 app.include_router(runs.router)
 app.include_router(approvals.router)

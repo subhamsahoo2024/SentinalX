@@ -1,5 +1,6 @@
 'use client';
 
+import { useSyncExternalStore } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -9,12 +10,14 @@ import { UserSessionMenu } from '@/components/governance/UserSessionMenu';
 import { LaunchScenarioModal } from '@/components/simulator/LaunchScenarioModal';
 import { useTheme } from '@/hooks/use-theme';
 import { ASSETS } from '@/lib/assets';
+import { getAuthUserSnapshot, subscribeAuth } from '@/lib/auth';
 
 function resolveTitle(pathname: string): string {
   if (pathname === '/') return 'Fleet Overview';
   if (pathname.startsWith('/approvals')) return 'Governance & Approvals';
   if (pathname.startsWith('/costs')) return 'Cost & Token Attribution';
   if (pathname.startsWith('/policies')) return 'Governance Policies';
+  if (pathname.startsWith('/settings/users')) return 'Users & Teams';
   if (pathname.startsWith('/runs/')) return 'Run Execution Detail';
   return 'Control Tower';
 }
@@ -28,6 +31,15 @@ export function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
   const pathname = usePathname();
   const title = resolveTitle(pathname);
   const { isDark, toggleTheme } = useTheme();
+  const user = useSyncExternalStore(
+    subscribeAuth,
+    getAuthUserSnapshot,
+    () => null,
+  );
+
+  if (pathname === '/login') {
+    return null;
+  }
 
   return (
     <header className="sticky top-0 z-20 flex h-14 items-center justify-between gap-4 border-b border-[#D4E2F4] dark:border-[#172E56] bg-white dark:bg-[#07152E] px-4 sm:px-6 shrink-0 transition-colors duration-150">
@@ -72,7 +84,7 @@ export function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
       </div>
 
       <div className="flex items-center gap-2 sm:gap-3 shrink-0">
-        <LaunchScenarioModal />
+        {user?.is_demo === true && <LaunchScenarioModal />}
         <button
           type="button"
           onClick={toggleTheme}

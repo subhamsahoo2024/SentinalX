@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { AppShell } from '@/components/AppShell';
-import { ApprovalProvider } from '@/components/governance/ApprovalContext';
 import { ASSETS } from '@/lib/assets';
 
 export const metadata: Metadata = {
@@ -36,9 +35,7 @@ export default function RootLayout({
         suppressHydrationWarning
         className="bg-[#F5F9FF] text-[#061838] dark:bg-[#030A17] dark:text-slate-100 transition-colors duration-150"
       >
-        <ApprovalProvider>
-          <AppShell>{children}</AppShell>
-        </ApprovalProvider>
+        <AppShell>{children}</AppShell>
       </body>
     </html>
   );

@@ -261,6 +261,30 @@ export interface SentinelUser {
   email: string;
   display_name: string;
   role: ActorRole | string;
+  allowed_teams: string[];
+  is_demo: boolean;
+}
+
+export interface SystemConfigDTO {
+  demo_sandbox_enabled: boolean;
+  needs_bootstrap: boolean;
+}
+
+export interface TeamDTO {
+  team_id: string;
+  display_name: string;
+  description?: string | null;
+  created_at: string;
+}
+
+export interface UserSummaryDTO {
+  user_id: string;
+  email: string;
+  display_name: string;
+  role: ActorRole | string;
+  allowed_teams: string[];
+  is_active: boolean;
+  created_at: string;
 }
 
 export type ScenarioType =

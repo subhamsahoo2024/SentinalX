@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "sentinel-dev-jwt-secret-change-in-prod-32chars"
     JWT_EXPIRE_MINUTES: int = 480
     ALLOW_DEV_HEADERS: bool = True
+    ENABLE_DEMO_SANDBOX: bool = True
+    INITIAL_ADMIN_EMAIL: str | None = None
+    INITIAL_ADMIN_PASSWORD: str | None = None
+
+    @property
+    def effective_allow_dev_headers(self) -> bool:
+        return self.ALLOW_DEV_HEADERS and self.ENABLE_DEMO_SANDBOX
 
     # Deterministic anomaly detection & watchdog thresholds
     LOOP_THRESHOLD_COUNT: int

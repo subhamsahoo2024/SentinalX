@@ -1,4 +1,5 @@
 import {
+  ActorRole,
   AgentResponse,
   AgentSloDTO,
   AlertDTO,
@@ -16,8 +17,16 @@ import {
   RunListItemResponse,
   RunSummaryDTO,
   SpanDTO,
+  SystemConfigDTO,
+  TeamDTO,
+  UserSummaryDTO,
 } from '@/types/telemetry';
-import { getStoredToken, getStoredUser } from '@/lib/auth';
+import {
+  type LoginResponse,
+  getStoredToken,
+  getStoredUser,
+  setAuthSession,
+} from '@/lib/auth';
 
 export type ScenarioType =
   | 'normal'
@@ -39,6 +48,32 @@ export interface SimulatorLaunchResponse {
   scenario: ScenarioType;
   team: string;
   status: string;
+}
+
+export interface BootstrapAdminPayload {
+  email: string;
+  password: string;
+  display_name: string;
+}
+
+export interface TeamCreatePayload {
+  team_id: string;
+  display_name: string;
+  description?: string | null;
+}
+
+export interface UserCreatePayload {
+  email: string;
+  display_name: string;
+  password: string;
+  role: ActorRole;
+  allowed_teams: string[];
+}
+
+export interface UserUpdatePayload {
+  role?: ActorRole;
+  allowed_teams?: string[];
+  is_active?: boolean;
 }
 
 const API_BASE_URL = (
@@ -427,6 +462,132 @@ export async function launchSimulationScenario(
       'Content-Type': 'application/json',
     },
     ...(effectiveRole ? { actorRole: effectiveRole } : {}),
+    body: JSON.stringify(payload),
+  });
+}
+
+async function parseErrorDetail(res: Response, fallbackPrefix: string): Promise<string> {
+  let detail = `${fallbackPrefix} (${res.status} ${res.statusText})`;
+  try {
+    const errJson = (await res.json()) as { detail?: string };
+    if (errJson && errJson.detail) {
+      detail = errJson.detail;
+    }
+  } catch {
+    // fallback
+  }
+  return detail;
+}
+
+/**
+ * Fetch public system configuration (demo sandbox flag and first-admin bootstrap state).
+ */
+export async function fetchSystemConfig(): Promise<SystemConfigDTO> {
+  const res = await fetch(`${API_BASE_URL}/api/system/config`, {
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    throw new Error(await parseErrorDetail(res, 'Failed to fetch system config'));
+  }
+  return res.json();
+}
+
+/**
+ * Initialize the first non-demo organization administrator and store the returned JWT.
+ */
+export async function bootstrapAdmin(
+  payload: BootstrapAdminPayload
+): Promise<LoginResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/auth/bootstrap-admin`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      email: payload.email.trim().toLowerCase(),
+      password: payload.password,
+      display_name: payload.display_name.trim(),
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(await parseErrorDetail(res, 'Failed to initialize admin'));
+  }
+  const data = (await res.json()) as LoginResponse;
+  setAuthSession(data.access_token, data.user);
+  return data;
+}
+
+/**
+ * Start a short-lived Demo Sandbox session using the demo approver account.
+ */
+export async function loginDemoSandbox(): Promise<LoginResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/auth/demo-login`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    throw new Error(await parseErrorDetail(res, 'Failed to launch demo sandbox'));
+  }
+  const data = (await res.json()) as LoginResponse;
+  setAuthSession(data.access_token, data.user);
+  return data;
+}
+
+/**
+ * Fetch all organizational teams ordered by display name.
+ */
+export async function fetchTeams(): Promise<TeamDTO[]> {
+  return apiFetch('/api/teams', {
+    cache: 'no-store',
+  });
+}
+
+/**
+ * Create a new organizational team (admin only).
+ */
+export async function createTeam(payload: TeamCreatePayload): Promise<TeamDTO> {
+  return apiFetch('/api/teams', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Fetch all non-demo organizational user accounts (admin only).
+ */
+export async function fetchUsers(): Promise<UserSummaryDTO[]> {
+  return apiFetch('/api/users', {
+    cache: 'no-store',
+  });
+}
+
+/**
+ * Provision a new organizational user account (admin only).
+ */
+export async function createUser(payload: UserCreatePayload): Promise<UserSummaryDTO> {
+  return apiFetch('/api/users', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Update role, allowed_teams, or active status for an organizational user (admin only).
+ */
+export async function updateUser(
+  userId: string,
+  payload: UserUpdatePayload
+): Promise<UserSummaryDTO> {
+  return apiFetch(`/api/users/${encodeURIComponent(userId)}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify(payload),
   });
 }
