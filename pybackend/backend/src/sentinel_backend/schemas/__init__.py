@@ -1,4 +1,9 @@
 from sentinel_backend.schemas.alerts import AlertDTO
+from sentinel_backend.schemas.api_keys import (
+    ApiKeyCreate,
+    ApiKeyCreatedDTO,
+    ApiKeyDTO,
+)
 from sentinel_backend.schemas.costs import (
     CostBreakdownItemDTO,
     CostSummaryDTO,
@@ -41,6 +46,9 @@ from sentinel_backend.schemas.telemetry import (
 __all__ = [
     "AgentSloDTO",
     "AlertDTO",
+    "ApiKeyCreate",
+    "ApiKeyCreatedDTO",
+    "ApiKeyDTO",
     "ApprovalDTO",
     "ApprovalDecisionRequest",
     "ApprovalRequestCreate",

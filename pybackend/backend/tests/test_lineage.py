@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
+from sentinel_backend.api.deps import ActorContext, get_current_actor
 from sentinel_backend.api.runs import router
 from sentinel_backend.db.session import get_db
 from sentinel_backend.models.run import Run
@@ -253,6 +254,12 @@ async def test_run_lineage_and_events_api_endpoints():
         yield mock_db
 
     test_app.dependency_overrides[get_db] = override_get_db
+    test_app.dependency_overrides[get_current_actor] = lambda: ActorContext(
+        actor_id="qa-user",
+        actor_role="operator",
+        allowed_teams=["qa"],
+        is_demo=False,
+    )
 
     # Test 1: Successful lineage call
     mock_db.get.return_value = run

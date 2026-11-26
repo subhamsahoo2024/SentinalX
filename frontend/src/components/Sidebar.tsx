@@ -8,6 +8,7 @@ import {
   Activity,
   DollarSign,
   FileText,
+  KeyRound,
   PanelLeftClose,
   ShieldCheck,
   Users,
@@ -50,6 +51,7 @@ export function Sidebar({ isOpen, isMobile, onClose }: SidebarProps) {
       ? [
           ...BASE_NAV_ITEMS,
           { href: '/settings/users', label: 'Users & Teams', icon: Users },
+          { href: '/settings/api-keys', label: 'API Keys', icon: KeyRound },
         ]
       : BASE_NAV_ITEMS;
 

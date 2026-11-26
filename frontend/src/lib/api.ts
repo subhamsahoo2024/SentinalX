@@ -3,6 +3,8 @@ import {
   AgentResponse,
   AgentSloDTO,
   AlertDTO,
+  ApiKeyCreatedDTO,
+  ApiKeyDTO,
   ApprovalDTO,
   AuditChainVerificationDTO,
   AuditEventDTO,
@@ -589,6 +591,42 @@ export async function updateUser(
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * List all minted team-bound ingestion API keys (non-demo admin only).
+ */
+export async function fetchApiKeys(): Promise<ApiKeyDTO[]> {
+  return apiFetch('/api/api-keys', {
+    cache: 'no-store',
+  });
+}
+
+/**
+ * Mint a new team-bound ingestion API key and return the one-time raw secret.
+ */
+export async function createApiKey(payload: {
+  name: string;
+  team: string;
+}): Promise<ApiKeyCreatedDTO> {
+  return apiFetch('/api/api-keys', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Soft-revoke an active team-bound API key (non-demo admin only).
+ */
+export async function revokeApiKey(
+  keyId: string
+): Promise<{ status: string; key_id: string }> {
+  return apiFetch(`/api/api-keys/${encodeURIComponent(keyId)}`, {
+    method: 'DELETE',
   });
 }
 

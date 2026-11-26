@@ -6,6 +6,7 @@ from decimal import Decimal
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sentinel_backend.api.deps import ActorContext, apply_team_scope
 from sentinel_backend.models.agent import Agent
 from sentinel_backend.models.pricing import PricingVersion
 from sentinel_backend.models.run import Run
@@ -178,23 +179,39 @@ async def calculate_run_costs(db: AsyncSession, run_id: str) -> None:
     await db.flush()
 
 
-async def get_cost_summary(db: AsyncSession) -> CostSummaryDTO:
-    """Aggregate fleet-wide costs and unknown-usage counts grouped by
+async def get_cost_summary(
+    db: AsyncSession,
+    actor: ActorContext | None = None,
+) -> CostSummaryDTO:
+    """Aggregate team-scoped costs and unknown-usage counts grouped by
 
     agent_id, team, model_name, and run_id.
     """
-    # 1. Fetch all runs
-    runs_res = await db.execute(select(Run).order_by(Run.started_at.desc()))
+    # 1. Fetch team-scoped runs
+    runs_stmt = select(Run).order_by(Run.started_at.desc())
+    if actor is not None:
+        runs_stmt = apply_team_scope(runs_stmt, Run.team, actor)
+    runs_res = await db.execute(runs_stmt)
     runs = list(runs_res.scalars().all())
     run_map = {r.run_id: r for r in runs}
 
-    # 2. Fetch all agents
-    agents_res = await db.execute(select(Agent))
+    # 2. Fetch team-scoped agents
+    agents_stmt = select(Agent)
+    if actor is not None:
+        agents_stmt = apply_team_scope(agents_stmt, Agent.team, actor)
+    agents_res = await db.execute(agents_stmt)
     agents = list(agents_res.scalars().all())
     agent_display_names = {a.agent_id: a.display_name for a in agents}
 
-    # 3. Fetch all spans
-    spans_res = await db.execute(select(Span))
+    # 3. Fetch team-scoped spans
+    spans_stmt = select(Span)
+    if actor is not None:
+        spans_stmt = apply_team_scope(
+            spans_stmt.join(Run, Span.run_id == Run.run_id),
+            Run.team,
+            actor,
+        )
+    spans_res = await db.execute(spans_stmt)
     spans = list(spans_res.scalars().all())
 
     # Overall totals

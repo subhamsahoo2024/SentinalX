@@ -6,7 +6,11 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sentinel_backend.api.deps import ActorContext, require_approver
+from sentinel_backend.api.deps import (
+    ActorContext,
+    get_current_actor,
+    require_approver,
+)
 from sentinel_backend.db.session import get_db
 from sentinel_backend.models.pricing import PricingVersion
 from sentinel_backend.schemas.costs import (
@@ -22,13 +26,14 @@ router = APIRouter(prefix="/api/costs", tags=["costs"])
 
 @router.get("/summary", response_model=CostSummaryDTO)
 async def get_summary(
+    actor: Annotated[ActorContext, Depends(get_current_actor)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> CostSummaryDTO:
-    """Aggregate costs and unknown-usage span counts grouped by
+    """Aggregate team-scoped costs and unknown-usage span counts grouped by
 
     agent_id, team, model_name, and run_id.
     """
-    return await get_cost_summary(db)
+    return await get_cost_summary(db, actor=actor)
 
 
 @router.get("/pricing", response_model=list[PricingVersionDTO])

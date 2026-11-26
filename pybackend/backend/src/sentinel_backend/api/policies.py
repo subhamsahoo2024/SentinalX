@@ -4,10 +4,14 @@ from decimal import Decimal
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sentinel_backend.api.deps import ActorContext, require_approver
+from sentinel_backend.api.deps import (
+    ActorContext,
+    get_current_actor,
+    require_approver,
+)
 from sentinel_backend.db.session import get_db
 from sentinel_backend.models.policy import Policy
 from sentinel_backend.schemas.policies import (
@@ -22,12 +26,30 @@ router = APIRouter(prefix="/api/policies", tags=["policies"])
 
 @router.get("", response_model=list[PolicyDTO])
 async def list_policies(
+    actor: Annotated[ActorContext, Depends(get_current_actor)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[PolicyDTO]:
-    """List all governance policies ordered by enabled descending, updated_at descending."""
-    stmt = select(Policy).order_by(
-        Policy.enabled.desc(), Policy.updated_at.desc()
-    )
+    """List global policies plus policies matching the actor's permitted teams."""
+    stmt = select(Policy)
+    if actor.is_demo:
+        stmt = stmt.where(
+            or_(Policy.team.is_(None), Policy.team == "demo-sandbox")
+        )
+    elif "*" in actor.allowed_teams:
+        stmt = stmt.where(
+            or_(Policy.team.is_(None), Policy.team != "demo-sandbox")
+        )
+    else:
+        stmt = stmt.where(
+            or_(
+                Policy.team.is_(None),
+                and_(
+                    Policy.team.in_(actor.allowed_teams),
+                    Policy.team != "demo-sandbox",
+                ),
+            )
+        )
+    stmt = stmt.order_by(Policy.enabled.desc(), Policy.updated_at.desc())
     res = await db.execute(stmt)
     policies = res.scalars().all()
     return [PolicyDTO.model_validate(p) for p in policies]

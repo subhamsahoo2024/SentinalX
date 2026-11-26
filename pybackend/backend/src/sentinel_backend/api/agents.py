@@ -8,6 +8,11 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from sentinel_backend.api.deps import (
+    ActorContext,
+    apply_team_scope,
+    get_current_actor,
+)
 from sentinel_backend.db.session import get_db
 from sentinel_backend.models.agent import Agent
 from sentinel_backend.models.alert import Alert
@@ -37,19 +42,31 @@ def _percentile(sorted_values: list[float], pct: float) -> float | None:
 
 @router.get("/slos", response_model=list[AgentSloDTO])
 async def get_agent_slos(
+    actor: Annotated[ActorContext, Depends(get_current_actor)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[AgentSloDTO]:
     """Calculate per-agent Service Level Objective (SLO) metrics.
 
-    Queries all Agent rows, all Span rows where span_type == 'AGENT', and all Alert rows.
+    Queries team-scoped Agent rows, AGENT Span rows, and Alert rows.
     """
-    agents_res = await db.execute(select(Agent))
+    agents_stmt = apply_team_scope(select(Agent), Agent.team, actor)
+    agents_res = await db.execute(agents_stmt)
     agents = list(agents_res.scalars().all())
 
-    spans_res = await db.execute(select(Span).where(Span.span_type == "AGENT"))
+    spans_stmt = apply_team_scope(
+        select(Span).join(Run, Span.run_id == Run.run_id).where(Span.span_type == "AGENT"),
+        Run.team,
+        actor,
+    )
+    spans_res = await db.execute(spans_stmt)
     agent_spans = list(spans_res.scalars().all())
 
-    alerts_res = await db.execute(select(Alert))
+    alerts_stmt = apply_team_scope(
+        select(Alert).join(Run, Alert.run_id == Run.run_id),
+        Run.team,
+        actor,
+    )
+    alerts_res = await db.execute(alerts_stmt)
     alerts = list(alerts_res.scalars().all())
 
     # Map span_id -> agent_id for AGENT spans
@@ -184,9 +201,10 @@ class AgentResponse(BaseModel):
 
 @router.get("", response_model=list[AgentResponse])
 async def list_agents(
+    actor: Annotated[ActorContext, Depends(get_current_actor)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[AgentResponse]:
-    """List all agents ordered by last_seen_at descending, including dynamic
+    """List team-scoped agents ordered by last_seen_at descending, including dynamic
 
     health_status ("ACTIVE" <= 60s, "IDLE" <= 15m, else "OFFLINE") and
     active_runs_count.
@@ -206,6 +224,7 @@ async def list_agents(
         .group_by(Agent.agent_id)
         .order_by(Agent.last_seen_at.desc())
     )
+    query = apply_team_scope(query, Agent.team, actor)
 
     result = await db.execute(query)
     rows = result.all()

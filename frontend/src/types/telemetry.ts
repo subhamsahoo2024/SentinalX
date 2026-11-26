@@ -287,6 +287,21 @@ export interface UserSummaryDTO {
   created_at: string;
 }
 
+export interface ApiKeyDTO {
+  key_id: string;
+  name: string;
+  team: string;
+  key_prefix: string;
+  created_by: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+}
+
+export interface ApiKeyCreatedDTO extends ApiKeyDTO {
+  raw_key: string;
+}
+
 export type ScenarioType =
   | 'normal'
   | 'hitl'

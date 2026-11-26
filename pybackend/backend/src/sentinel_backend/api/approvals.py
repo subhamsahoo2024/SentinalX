@@ -1,17 +1,21 @@
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sentinel_backend.api.deps import (
     ActorContext,
+    apply_team_scope,
+    get_current_actor,
     require_approver,
     verify_api_key,
 )
 from sentinel_backend.db.session import get_db
 from sentinel_backend.models.approval import Approval
 from sentinel_backend.models.audit import AuditEvent
+from sentinel_backend.models.run import Run
+from sentinel_backend.models.user import UserAccount
 from sentinel_backend.schemas.governance import (
     ApprovalDecisionRequest,
     ApprovalDTO,
@@ -59,11 +63,14 @@ async def wait_approval(
     response_model=list[ApprovalDTO],
 )
 async def list_approvals(
+    actor: Annotated[ActorContext, Depends(get_current_actor)],
     db: Annotated[AsyncSession, Depends(get_db)],
     status: Annotated[str | None, Query()] = None,
 ) -> list[ApprovalDTO]:
-    """List approval requests ordered chronologically descending, optionally filtered by status."""
-    stmt = select(Approval).order_by(Approval.created_at.desc())
+    """List team-scoped approval requests ordered chronologically descending."""
+    stmt = select(Approval).join(Run, Approval.run_id == Run.run_id)
+    stmt = apply_team_scope(stmt, Run.team, actor)
+    stmt = stmt.order_by(Approval.created_at.desc())
     if status is not None:
         stmt = stmt.where(Approval.status == status)
     result = await db.execute(stmt)
@@ -90,14 +97,32 @@ async def post_approval_decision(
     response_model=list[AuditEventDTO],
 )
 async def list_audit_events(
+    actor: Annotated[ActorContext, Depends(get_current_actor)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[AuditEventDTO]:
-    """List recent governance audit log events ordered chronologically descending (limit 100)."""
-    stmt = (
-        select(AuditEvent)
-        .order_by(AuditEvent.created_at.desc())
-        .limit(100)
+    """List recent governance audit log events isolated between demo and organization scopes."""
+    demo_emails = select(UserAccount.email).where(
+        UserAccount.is_demo_account.is_(True)
     )
+    stmt = select(AuditEvent)
+    if actor.is_demo:
+        stmt = stmt.where(
+            or_(
+                AuditEvent.actor_id.endswith("@sentinel.local"),
+                AuditEvent.actor_id.in_(demo_emails),
+                func.coalesce(AuditEvent.payload["team"].astext, "")
+                == "demo-sandbox",
+            )
+        )
+    else:
+        stmt = stmt.where(
+            ~AuditEvent.actor_id.endswith("@sentinel.local"),
+            ~AuditEvent.actor_id.in_(demo_emails),
+            func.coalesce(AuditEvent.payload["team"].astext, "")
+            != "demo-sandbox",
+        )
+
+    stmt = stmt.order_by(AuditEvent.created_at.desc()).limit(100)
     result = await db.execute(stmt)
     events = result.scalars().all()
     return [AuditEventDTO.model_validate(e) for e in events]

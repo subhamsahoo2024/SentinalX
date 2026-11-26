@@ -8,7 +8,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from sentinel_backend.api.deps import ActorContext
+from sentinel_backend.api.deps import ActorContext, assert_team_access
 from sentinel_backend.models.approval import Approval
 from sentinel_backend.models.run import Run
 from sentinel_backend.models.span import Span
@@ -101,6 +101,7 @@ async def create_approval_request(
 
     dto = ApprovalDTO.model_validate(approval)
     payload = dto.model_dump(mode="json")
+    payload["team"] = run.team
 
     # Publish APPROVAL_REQUIRED event
     await publish_event("fleet:stream", "APPROVAL_REQUIRED", payload)
@@ -181,6 +182,10 @@ async def decide_approval(
             detail=f"Approval request '{approval_id}' not found",
         )
 
+    run = await db.get(Run, approval.run_id)
+    if isinstance(run, Run):
+        assert_team_access(run.team or "default", actor)
+
     if approval.status != "PENDING":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -208,15 +213,25 @@ async def decide_approval(
             .values(status=new_span_status)
         )
 
-    run = await db.get(Run, approval.run_id)
-    if run:
+    if isinstance(run, Run):
         run.status = "RUNNING"
+        run_team = run.team or "default"
     else:
         await db.execute(
             update(Run)
             .where(Run.run_id == approval.run_id)
             .values(status="RUNNING")
         )
+        run_team = "default"
+
+    audit_payload: dict[str, Any] = {
+        "run_id": approval.run_id,
+        "span_id": approval.span_id,
+        "tool_name": approval.tool_name,
+        "comment": body.comment,
+    }
+    if isinstance(run, Run):
+        audit_payload["team"] = run_team
 
     await append_audit_event(
         db=db,
@@ -225,12 +240,7 @@ async def decide_approval(
         action=f"APPROVAL_{body.decision}",
         target_type="approval",
         target_id=approval_id,
-        payload={
-            "run_id": approval.run_id,
-            "span_id": approval.span_id,
-            "tool_name": approval.tool_name,
-            "comment": body.comment,
-        },
+        payload=audit_payload,
     )
 
     await db.commit()
@@ -241,6 +251,7 @@ async def decide_approval(
         "approval_id": approval.approval_id,
         "run_id": approval.run_id,
         "span_id": approval.span_id,
+        "team": run_team,
         "status": approval.status,
         "decided_by": approval.decided_by,
         "decided_at": (

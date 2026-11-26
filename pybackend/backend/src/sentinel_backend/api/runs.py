@@ -9,6 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sentinel_backend.api.deps import (
     ActorContext,
+    apply_team_scope,
+    assert_team_access,
+    get_current_actor,
     require_approver,
     verify_api_key,
 )
@@ -120,6 +123,7 @@ async def list_runs(
     agent_id: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
+    actor: Annotated[ActorContext, Depends(get_current_actor)] = None,  # type: ignore[assignment]
     db: Annotated[AsyncSession, Depends(get_db)] = None,  # type: ignore[assignment]
 ) -> list[RunListItemResponse]:
     """List runs ordered by started_at descending, supporting filtering by
@@ -149,6 +153,7 @@ async def list_runs(
         .limit(limit)
         .offset(offset)
     )
+    query = apply_team_scope(query, Run.team, actor)
 
     if status:
         query = query.where(Run.status == status)
@@ -187,6 +192,7 @@ async def list_runs(
 @router.get("/{run_id}", response_model=RunSummaryDTO)
 async def get_run_details(
     run_id: str,
+    actor: Annotated[ActorContext, Depends(get_current_actor)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> RunSummaryDTO:
     """Retrieve detailed RunSummaryDTO for a given run_id or return 404."""
@@ -196,6 +202,7 @@ async def get_run_details(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Run '{run_id}' not found",
         )
+    assert_team_access(run_obj.team, actor)
     return await _build_run_summary(db, run_obj)
 
 
@@ -212,6 +219,7 @@ async def cancel_run(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Run '{run_id}' not found",
         )
+    assert_team_access(run_obj.team, actor)
 
     if run_obj.status in TERMINAL_RUN_STATUSES:
         raise HTTPException(
@@ -241,6 +249,7 @@ async def cancel_run(
         target_type="run",
         target_id=run_id,
         payload={
+            "team": run_obj.team,
             "previous_status": previous_status,
             "cancelled_at": now_utc.isoformat(),
         },
@@ -291,18 +300,26 @@ async def get_run_control_state(
 @router.get("/{run_id}/lineage", response_model=LineageGraphDTO)
 async def get_run_lineage(
     run_id: str,
+    actor: Annotated[ActorContext, Depends(get_current_actor)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> LineageGraphDTO:
     """Build and return an acyclic DAG LineageGraphDTO for a given run_id."""
+    run_obj = await db.get(Run, run_id)
+    if run_obj is not None:
+        assert_team_access(run_obj.team, actor)
     return await build_run_lineage(db, run_id)
 
 
 @router.get("/{run_id}/events", response_model=list[SpanDTO])
 async def get_run_events_endpoint(
     run_id: str,
+    actor: Annotated[ActorContext, Depends(get_current_actor)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> list[SpanDTO]:
     """Retrieve all spans for a run ordered chronologically by started_at ASC for audit replay."""
+    run_obj = await db.get(Run, run_id)
+    if run_obj is not None:
+        assert_team_access(run_obj.team, actor)
     return await get_run_events(db, run_id)
 
 

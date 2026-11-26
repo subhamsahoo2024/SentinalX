@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 from pydantic import ValidationError
@@ -532,27 +533,44 @@ async def test_api_cancel_run():
     mock_db.execute.return_value = spans_mock
 
     app.dependency_overrides[get_db] = lambda: mock_db
+
+    def _org_headers(actor_id: str, role: str) -> dict[str, str]:
+        token = jwt.encode(
+            {
+                "sub": actor_id,
+                "email": actor_id,
+                "name": actor_id,
+                "role": role,
+                "allowed_teams": ["secops"],
+                "is_demo": False,
+                "exp": datetime.now(UTC) + timedelta(minutes=30),
+            },
+            settings.JWT_SECRET,
+            algorithm="HS256",
+        )
+        return {"Authorization": f"Bearer {token}"}
+
     try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             # 1. 403 Forbidden for viewer
             resp_viewer = await client.post(
                 "/api/runs/run_cancel_target/cancel",
-                headers={"X-Actor-Id": "v1", "X-Actor-Role": "viewer"},
+                headers=_org_headers("v1", "viewer"),
             )
             assert resp_viewer.status_code == 403
 
             # 2. 404 for missing run
             resp_404 = await client.post(
                 "/api/runs/run_nonexistent/cancel",
-                headers={"X-Actor-Id": "admin-1", "X-Actor-Role": "approver"},
+                headers=_org_headers("admin-1", "approver"),
             )
             assert resp_404.status_code == 404
 
             # 3. 409 Conflict for already terminal run
             resp_409 = await client.post(
                 "/api/runs/run_already_terminal/cancel",
-                headers={"X-Actor-Id": "admin-1", "X-Actor-Role": "approver"},
+                headers=_org_headers("admin-1", "approver"),
             )
             assert resp_409.status_code == 409
 
@@ -564,7 +582,7 @@ async def test_api_cancel_run():
             ):
                 resp_cancel = await client.post(
                     "/api/runs/run_cancel_target/cancel",
-                    headers={"X-Actor-Id": "operator-1", "X-Actor-Role": "approver"},
+                    headers=_org_headers("operator-1", "approver"),
                 )
                 assert resp_cancel.status_code == 200
                 data = resp_cancel.json()

@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sentinel_backend.api import (
     agents,
     alerts,
+    api_keys,
     approvals,
     auth,
     costs,
@@ -93,6 +94,7 @@ app.include_router(telemetry.router)
 app.include_router(auth.router)
 app.include_router(system.router)
 app.include_router(users.router)
+app.include_router(api_keys.router)
 app.include_router(agents.router)
 app.include_router(runs.router)
 app.include_router(approvals.router)

@@ -30,21 +30,28 @@ TERMINAL_SPAN_STATUSES: set[str] = {
 
 
 async def ingest_telemetry_batch(
-    db: AsyncSession, events: list[CanonicalEventV1]
+    db: AsyncSession,
+    events: list[CanonicalEventV1],
+    enforced_team: str | None = None,
 ) -> dict[str, Any]:
     """Idempotently ingest a batch of CanonicalEventV1 telemetry events.
 
-    1. Sorts events chronologically by started_at ascending.
-    2. Upserts Agent records.
-    3. Upserts Run records with root agent and status transitions.
-    4. Upserts Span records with token/cost updates and attributes merge.
-    5. Recomputes run.total_tokens from span sums to guarantee idempotency.
-    6. Commits DB transaction.
-    7. Publishes SPAN_UPSERT, RUN_UPDATED, and FLEET_UPDATED to Redis channels.
-    8. Returns {"accepted": len(events), "run_ids": list(affected_run_ids)}.
+    1. Overwrites event.team when enforced_team is supplied from ingest auth.
+    2. Sorts events chronologically by started_at ascending.
+    3. Upserts Agent records.
+    4. Upserts Run records with root agent and status transitions.
+    5. Upserts Span records with token/cost updates and attributes merge.
+    6. Recomputes run.total_tokens from span sums to guarantee idempotency.
+    7. Commits DB transaction.
+    8. Publishes SPAN_UPSERT, RUN_UPDATED, and FLEET_UPDATED to Redis channels.
+    9. Returns {"accepted": len(events), "run_ids": list(affected_run_ids)}.
     """
     if not events:
         return {"accepted": 0, "run_ids": []}
+
+    if enforced_team is not None:
+        for event in events:
+            event.team = enforced_team
 
     # 1. Sort incoming events by started_at ascending
     sorted_events = sorted(events, key=lambda e: e.started_at)
@@ -258,6 +265,7 @@ async def ingest_telemetry_batch(
             "trace_id": event.trace_id,
             "parent_span_id": event.parent_span_id,
             "agent_id": event.agent_id,
+            "team": event.team,
             "operation_name": event.operation_name,
             "span_type": event.span_type.value
             if hasattr(event.span_type, "value")
@@ -304,12 +312,24 @@ async def ingest_telemetry_batch(
                 f"run:{r_id}:stream", "RUN_UPDATED", run_payload
             )
 
-    fleet_payload = {
-        "run_ids": list(affected_run_ids),
-        "agent_ids": list({e.agent_id for e in events}),
-        "event_count": len(events),
-    }
-    await publish_event("fleet:stream", "FLEET_UPDATED", fleet_payload)
+    teams = sorted({e.team for e in sorted_events if e.team}) or ["default"]
+    agent_ids_by_team: dict[str, set[str]] = {}
+    run_ids_by_team: dict[str, set[str]] = {}
+    event_count_by_team: dict[str, int] = {}
+    for e in sorted_events:
+        t = e.team or "default"
+        agent_ids_by_team.setdefault(t, set()).add(e.agent_id)
+        run_ids_by_team.setdefault(t, set()).add(e.run_id)
+        event_count_by_team[t] = event_count_by_team.get(t, 0) + 1
+
+    for team_name in teams:
+        fleet_payload = {
+            "team": team_name,
+            "run_ids": sorted(run_ids_by_team.get(team_name, set())),
+            "agent_ids": sorted(agent_ids_by_team.get(team_name, set())),
+            "event_count": event_count_by_team.get(team_name, 0),
+        }
+        await publish_event("fleet:stream", "FLEET_UPDATED", fleet_payload)
 
     return {"accepted": len(events), "run_ids": list(affected_run_ids)}
 

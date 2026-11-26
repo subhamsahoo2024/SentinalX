@@ -53,6 +53,7 @@ async def _upsert_alert(
     title: str,
     evidence: dict[str, Any],
     impacted_span_ids: list[str],
+    team: str | None = None,
 ) -> AlertDTO:
     """Query for an existing unacknowledged Alert with the same (run_id, rule_id).
 
@@ -117,6 +118,8 @@ async def _upsert_alert(
     )
 
     payload = alert_dto.model_dump(mode="json")
+    if team is not None:
+        payload["team"] = team
     await publish_event(f"run:{run_id}:stream", "ALERT_CREATED", payload)
     await publish_event("fleet:stream", "ALERT_CREATED", payload)
 
@@ -232,6 +235,7 @@ async def evaluate_run_anomalies(
                 title=title,
                 evidence=evidence,
                 impacted_span_ids=impacted_ids,
+                team=run.team,
             )
             triggered_alerts.append(loop_alert)
 
@@ -309,6 +313,7 @@ async def evaluate_run_anomalies(
             title=title,
             evidence=evidence,
             impacted_span_ids=impacted_span_ids,
+            team=run.team,
         )
         triggered_alerts.append(budget_alert)
 
@@ -452,6 +457,7 @@ async def evaluate_run_anomalies(
                     title=title,
                     evidence=evidence,
                     impacted_span_ids=impacted_span_ids,
+                    team=run.team,
                 )
                 triggered_alerts.append(cascade_alert)
 
@@ -530,6 +536,7 @@ async def check_stalled_runs(db: AsyncSession) -> list[AlertDTO]:
             title=title,
             evidence=evidence,
             impacted_span_ids=open_span_ids,
+            team=run.team,
         )
         alerts.append(alert)
 
@@ -541,6 +548,7 @@ async def check_stalled_runs(db: AsyncSession) -> list[AlertDTO]:
                 "trace_id": s.trace_id,
                 "parent_span_id": s.parent_span_id,
                 "agent_id": s.agent_id,
+                "team": run.team,
                 "operation_name": s.operation_name,
                 "span_type": str(s.span_type),
                 "status": "STALLED",
@@ -579,6 +587,7 @@ async def check_stalled_runs(db: AsyncSession) -> list[AlertDTO]:
         )
 
         fleet_payload = {
+            "team": run.team,
             "run_ids": [run.run_id],
             "agent_ids": [run.root_agent_id] if run.root_agent_id else [],
             "event_count": 0,

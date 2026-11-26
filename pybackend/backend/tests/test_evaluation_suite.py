@@ -18,6 +18,7 @@ from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import jwt
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sentinel_backend.config import settings
@@ -34,6 +35,23 @@ from sentinel_backend.services.anomaly_engine import (
     evaluate_run_anomalies,
 )
 from sentinel_backend.services.cost_calculator import calculate_run_costs
+
+
+def _org_headers(actor_id: str = "eval-approver", role: str = "approver") -> dict[str, str]:
+    token = jwt.encode(
+        {
+            "sub": actor_id,
+            "email": actor_id,
+            "name": actor_id,
+            "role": role,
+            "allowed_teams": ["*"],
+            "is_demo": False,
+            "exp": datetime.now(UTC) + timedelta(minutes=30),
+        },
+        settings.JWT_SECRET,
+        algorithm="HS256",
+    )
+    return {"Authorization": f"Bearer {token}"}
 
 
 class EvaluationMockDB:
@@ -233,7 +251,7 @@ async def test_01_normal_delegation():
     try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.get("/api/runs/run_eval_01/lineage")
+            resp = await client.get("/api/runs/run_eval_01/lineage", headers=_org_headers())
             assert resp.status_code == 200
             data = resp.json()
 
@@ -322,7 +340,7 @@ async def test_02_tool_failure():
     try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.get("/api/runs/run_eval_02/lineage")
+            resp = await client.get("/api/runs/run_eval_02/lineage", headers=_org_headers())
             assert resp.status_code == 200
             data = resp.json()
 
@@ -405,7 +423,10 @@ async def test_03_repeated_tool_loop():
         # Verify via REST API: GET /api/alerts?run_id=run_eval_03
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp_alerts = await client.get("/api/alerts?run_id=run_eval_03")
+            resp_alerts = await client.get(
+                "/api/alerts?run_id=run_eval_03",
+                headers=_org_headers(),
+            )
             assert resp_alerts.status_code == 200
             alert_items = resp_alerts.json()
             assert len(alert_items) == 1
@@ -413,7 +434,10 @@ async def test_03_repeated_tool_loop():
             assert alert_items[0]["evidence"]["repeat_count"] == 4
 
             # Verify Lineage keeps acyclic attempt_number nodes
-            resp_lineage = await client.get("/api/runs/run_eval_03/lineage")
+            resp_lineage = await client.get(
+                "/api/runs/run_eval_03/lineage",
+                headers=_org_headers(),
+            )
             assert resp_lineage.status_code == 200
             lineage_data = resp_lineage.json()
 
@@ -741,10 +765,7 @@ async def test_07_approval_required_and_approved():
             with patch("sentinel_backend.services.governance.publish_event", new_callable=AsyncMock):
                 resp_dec = await client.post(
                     f"/api/approvals/{approval_id}/decision",
-                    headers={
-                        "X-Actor-Id": "lead-sre-alice",
-                        "X-Actor-Role": "approver",
-                    },
+                    headers=_org_headers("lead-sre-alice", "approver"),
                     json=decision_body,
                 )
                 assert resp_dec.status_code == 200
@@ -755,7 +776,7 @@ async def test_07_approval_required_and_approved():
                 assert run.status == "RUNNING"
 
             # 3. Verify append-only AuditEvent log
-            resp_audit = await client.get("/api/audit-events")
+            resp_audit = await client.get("/api/audit-events", headers=_org_headers())
             assert resp_audit.status_code == 200
             audit_events = resp_audit.json()
             assert len(audit_events) >= 1
@@ -825,10 +846,7 @@ async def test_08_approval_rejected_and_rbac():
             # 1. RBAC Check: viewer role must get 403 Forbidden
             resp_rbac = await client.post(
                 "/api/approvals/apr_eval_08_reject/decision",
-                headers={
-                    "X-Actor-Id": "guest-observer",
-                    "X-Actor-Role": "viewer",
-                },
+                headers=_org_headers("guest-observer", "viewer"),
                 json={"decision": "REJECTED", "comment": "Trying to decide as viewer"},
             )
             assert resp_rbac.status_code == 403
@@ -838,10 +856,7 @@ async def test_08_approval_rejected_and_rbac():
             with patch("sentinel_backend.services.governance.publish_event", new_callable=AsyncMock):
                 resp_dec = await client.post(
                     "/api/approvals/apr_eval_08_reject/decision",
-                    headers={
-                        "X-Actor-Id": "security-officer-dan",
-                        "X-Actor-Role": "approver",
-                    },
+                    headers=_org_headers("security-officer-dan", "approver"),
                     json={"decision": "REJECTED", "comment": "Unsafe global flush blocked"},
                 )
                 assert resp_dec.status_code == 200
@@ -853,7 +868,7 @@ async def test_08_approval_rejected_and_rbac():
                 assert span.status == "CANCELLED"
 
             # 3. Verify immutable AuditEvent
-            resp_audit = await client.get("/api/audit-events")
+            resp_audit = await client.get("/api/audit-events", headers=_org_headers())
             assert resp_audit.status_code == 200
             audit_events = resp_audit.json()
             rejected_event = next((e for e in audit_events if e["action"] == "APPROVAL_REJECTED"), None)
@@ -989,7 +1004,7 @@ async def test_09_cost_rollup_no_double_counting():
         # 4. Verify Lineage DAG rolled_up_cost_usd via REST API
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.get("/api/runs/run_eval_09/lineage")
+            resp = await client.get("/api/runs/run_eval_09/lineage", headers=_org_headers())
             assert resp.status_code == 200
             data = resp.json()
 
@@ -1083,7 +1098,7 @@ async def test_10_missing_usage_marked_unknown():
         # Verify Lineage node preserves UNKNOWN cost basis and None direct cost
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.get("/api/runs/run_eval_10/lineage")
+            resp = await client.get("/api/runs/run_eval_10/lineage", headers=_org_headers())
             assert resp.status_code == 200
             data = resp.json()
 

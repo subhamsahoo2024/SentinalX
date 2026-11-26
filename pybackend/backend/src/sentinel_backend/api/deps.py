@@ -1,13 +1,25 @@
+import hashlib
 import secrets
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import jwt
 from fastapi import Depends, Header, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy import Select, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from sentinel_backend.config import settings
+from sentinel_backend.db.session import get_db
+from sentinel_backend.models.api_key import ApiKey
 
 VALID_ACTOR_ROLES = {"viewer", "operator", "approver", "admin"}
+
+
+class IngestContext(BaseModel):
+    team: str
+    key_id: str
+    is_demo: bool = False
 
 
 class ActorContext(BaseModel):
@@ -54,16 +66,18 @@ async def verify_api_key(
 async def verify_ingest_auth(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     authorization: str | None = Header(default=None, alias="Authorization"),
-) -> str:
-    """Verifies ingest authentication via either X-API-Key or Authorization: Bearer <token>.
+    db: AsyncSession = Depends(get_db),  # noqa: B008
+) -> IngestContext:
+    """Verifies ingest authentication via X-API-Key or Authorization: Bearer <token>.
 
-    Matches against configured SENTINEL_API_KEY.
-    Raises 401 Unauthorized if missing or invalid.
+    Supports the environment demo key when ENABLE_DEMO_SANDBOX is True, or active
+    team-bound ApiKey records hashed with SHA-256.
+    Raises 401 Unauthorized if missing, invalid, or revoked.
     """
     provided_key: str | None = None
 
     if x_api_key:
-        provided_key = x_api_key
+        provided_key = x_api_key.strip()
     elif authorization:
         parts = authorization.split(maxsplit=1)
         if len(parts) == 2 and parts[0].lower() == "bearer":
@@ -71,15 +85,80 @@ async def verify_ingest_auth(
         else:
             provided_key = authorization.strip()
 
-    if not provided_key or not secrets.compare_digest(
-        provided_key, settings.SENTINEL_API_KEY
-    ):
+    if not provided_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing API key",
+            detail="Invalid or revoked API key",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return provided_key
+
+    if settings.ENABLE_DEMO_SANDBOX and secrets.compare_digest(
+        provided_key, settings.SENTINEL_API_KEY
+    ):
+        return IngestContext(
+            team="demo-sandbox",
+            key_id="env-demo-key",
+            is_demo=True,
+        )
+
+    digest = hashlib.sha256(provided_key.encode("utf-8")).hexdigest()
+    stmt = select(ApiKey).where(
+        ApiKey.key_hash == digest,
+        ApiKey.revoked_at.is_(None),
+    )
+    result = await db.execute(stmt)
+    api_key = result.scalar_one_or_none()
+    if api_key is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or revoked API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    api_key.last_used_at = datetime.now(UTC)
+    await db.commit()
+    return IngestContext(
+        team=api_key.team,
+        key_id=api_key.key_id,
+        is_demo=False,
+    )
+
+
+def decode_actor_from_token(token: str) -> ActorContext:
+    """Decode and validate an HS256 JWT into an ActorContext."""
+    try:
+        claims = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
+    except jwt.PyJWTError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid or expired authentication token: {e}",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from e
+
+    actor_role = claims.get("role")
+    if actor_role not in VALID_ACTOR_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid actor role '{actor_role}' in token claims",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    actor_id = claims.get("email") or claims.get("sub") or "unknown"
+    display_name = claims.get("name") or actor_id
+    raw_allowed_teams = claims.get("allowed_teams")
+    allowed_teams = (
+        [str(team) for team in raw_allowed_teams]
+        if isinstance(raw_allowed_teams, list)
+        else ["*"]
+    )
+    is_demo = bool(claims.get("is_demo", False))
+    return ActorContext(
+        actor_id=actor_id,
+        actor_role=actor_role,
+        display_name=display_name,
+        allowed_teams=allowed_teams,
+        is_demo=is_demo,
+    )
 
 
 async def get_current_actor(
@@ -98,41 +177,7 @@ async def get_current_actor(
     raw_auth = authorization if isinstance(authorization, str) else None
     if raw_auth and raw_auth.startswith("Bearer "):
         token = raw_auth[len("Bearer ") :].strip()
-        try:
-            claims = jwt.decode(
-                token, settings.JWT_SECRET, algorithms=["HS256"]
-            )
-        except jwt.PyJWTError as e:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Invalid or expired authentication token: {e}",
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from e
-
-        actor_role = claims.get("role")
-        if actor_role not in VALID_ACTOR_ROLES:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Invalid actor role '{actor_role}' in token claims",
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-
-        actor_id = claims.get("email") or claims.get("sub") or "unknown"
-        display_name = claims.get("name") or actor_id
-        raw_allowed_teams = claims.get("allowed_teams")
-        allowed_teams = (
-            [str(team) for team in raw_allowed_teams]
-            if isinstance(raw_allowed_teams, list)
-            else ["*"]
-        )
-        is_demo = bool(claims.get("is_demo", False))
-        return ActorContext(
-            actor_id=actor_id,
-            actor_role=actor_role,
-            display_name=display_name,
-            allowed_teams=allowed_teams,
-            is_demo=is_demo,
-        )
+        return decode_actor_from_token(token)
 
     if settings.effective_allow_dev_headers:
         actor_id_val = x_actor_id if isinstance(x_actor_id, str) else "operator-1"
@@ -190,9 +235,46 @@ async def require_admin(
     return actor
 
 
+def apply_team_scope(
+    stmt: Select[Any],
+    team_column: Any,
+    actor: ActorContext,
+) -> Select[Any]:
+    """Restrict a SQLAlchemy Select statement to the actor's visible teams."""
+    if actor.is_demo:
+        return stmt.where(team_column == "demo-sandbox")
+    if "*" in actor.allowed_teams:
+        return stmt.where(team_column != "demo-sandbox")
+    return stmt.where(
+        team_column.in_(actor.allowed_teams),
+        team_column != "demo-sandbox",
+    )
+
+
+def assert_team_access(team: str, actor: ActorContext) -> None:
+    """Verify the actor has permission to access resources belonging to `team`."""
+    if actor.is_demo and team != "demo-sandbox":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Demo sandbox actors can only access 'demo-sandbox' resources",
+        )
+    if not actor.is_demo and (
+        team == "demo-sandbox"
+        or ("*" not in actor.allowed_teams and team not in actor.allowed_teams)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Actor does not have access to team '{team}'",
+        )
+
+
 __all__ = [
     "VALID_ACTOR_ROLES",
     "ActorContext",
+    "IngestContext",
+    "apply_team_scope",
+    "assert_team_access",
+    "decode_actor_from_token",
     "get_current_actor",
     "require_admin",
     "require_approver",

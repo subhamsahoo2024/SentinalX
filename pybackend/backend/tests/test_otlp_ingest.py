@@ -1,6 +1,6 @@
 import json
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -9,7 +9,7 @@ from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import (
     ExportTraceServiceRequest,
 )
 from opentelemetry.proto.trace.v1.trace_pb2 import Status
-from sentinel_backend.api.deps import verify_ingest_auth
+from sentinel_backend.api.deps import IngestContext, verify_ingest_auth
 from sentinel_backend.config import settings
 from sentinel_backend.db.session import get_db
 from sentinel_backend.main import app
@@ -284,27 +284,45 @@ def test_parse_otlp_protobuf():
 
 @pytest.mark.asyncio
 async def test_verify_ingest_auth_with_api_key():
-    key = await verify_ingest_auth(x_api_key=settings.SENTINEL_API_KEY, authorization=None)
-    assert key == settings.SENTINEL_API_KEY
+    mock_db = AsyncMock()
+    ctx = await verify_ingest_auth(
+        x_api_key=settings.SENTINEL_API_KEY,
+        authorization=None,
+        db=mock_db,
+    )
+    assert isinstance(ctx, IngestContext)
+    assert ctx.team == "demo-sandbox"
+    assert ctx.key_id == "env-demo-key"
+    assert ctx.is_demo is True
 
 
 @pytest.mark.asyncio
 async def test_verify_ingest_auth_with_bearer():
-    key = await verify_ingest_auth(
+    mock_db = AsyncMock()
+    ctx = await verify_ingest_auth(
         x_api_key=None,
         authorization=f"Bearer {settings.SENTINEL_API_KEY}",
+        db=mock_db,
     )
-    assert key == settings.SENTINEL_API_KEY
+    assert isinstance(ctx, IngestContext)
+    assert ctx.team == "demo-sandbox"
+    assert ctx.key_id == "env-demo-key"
+    assert ctx.is_demo is True
 
 
 @pytest.mark.asyncio
 async def test_verify_ingest_auth_failure():
+    mock_db = AsyncMock()
+    empty_result = MagicMock()
+    empty_result.scalar_one_or_none.return_value = None
+    mock_db.execute.return_value = empty_result
+
     with pytest.raises(HTTPException) as exc_info:
-        await verify_ingest_auth(x_api_key="wrong-key", authorization=None)
+        await verify_ingest_auth(x_api_key="wrong-key", authorization=None, db=mock_db)
     assert exc_info.value.status_code == 401
 
     with pytest.raises(HTTPException) as exc_info:
-        await verify_ingest_auth(x_api_key=None, authorization=None)
+        await verify_ingest_auth(x_api_key=None, authorization=None, db=mock_db)
     assert exc_info.value.status_code == 401
 
 

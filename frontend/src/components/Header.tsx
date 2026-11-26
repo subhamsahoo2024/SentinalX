@@ -18,6 +18,7 @@ function resolveTitle(pathname: string): string {
   if (pathname.startsWith('/costs')) return 'Cost & Token Attribution';
   if (pathname.startsWith('/policies')) return 'Governance Policies';
   if (pathname.startsWith('/settings/users')) return 'Users & Teams';
+  if (pathname.startsWith('/settings/api-keys')) return 'API Keys';
   if (pathname.startsWith('/runs/')) return 'Run Execution Detail';
   return 'Control Tower';
 }
