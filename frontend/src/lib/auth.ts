@@ -52,6 +52,31 @@ const API_BASE_URL = (
 let cachedUserRaw: string | null = null;
 let cachedUserObj: AuthUser | null = null;
 
+function decodeBase64Url(segment: string): string {
+  const base64 = segment.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=');
+  return atob(padded);
+}
+
+export function getTokenExpirationMs(token: string): number | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3 || !parts[1]) return null;
+    const payload = JSON.parse(decodeBase64Url(parts[1])) as { exp?: unknown };
+    if (typeof payload.exp !== 'number' || !Number.isFinite(payload.exp)) {
+      return null;
+    }
+    return payload.exp * 1000;
+  } catch {
+    return null;
+  }
+}
+
+export function isTokenExpired(token: string): boolean {
+  const expMs = getTokenExpirationMs(token);
+  return expMs === null || expMs <= Date.now();
+}
+
 function normalizeAuthUser(rawUser: Partial<AuthUser>): AuthUser {
   return {
     user_id: rawUser.user_id || '',
@@ -80,6 +105,9 @@ export function getAuthTokenSnapshot(): string | null {
 
 export function getAuthUserSnapshot(): AuthUser | null {
   if (typeof window === 'undefined') return null;
+  if (!getStoredToken()) {
+    return null;
+  }
   try {
     const raw = window.localStorage.getItem(USER_KEY) ?? '__empty__';
     if (raw !== cachedUserRaw) {
@@ -98,7 +126,11 @@ export function getAuthUserSnapshot(): AuthUser | null {
 export function getStoredToken(): string | null {
   if (typeof window === 'undefined') return null;
   try {
-    return localStorage.getItem(TOKEN_KEY);
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token || isTokenExpired(token)) {
+      return null;
+    }
+    return token;
   } catch {
     return null;
   }
@@ -106,6 +138,7 @@ export function getStoredToken(): string | null {
 
 export function getStoredUser(): AuthUser | null {
   if (typeof window === 'undefined') return null;
+  if (!getStoredToken()) return null;
   try {
     const raw = localStorage.getItem(USER_KEY);
     if (!raw) return null;

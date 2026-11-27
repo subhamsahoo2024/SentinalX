@@ -9,7 +9,7 @@ from sentinel_backend.api.deps import (
     apply_team_scope,
     get_current_actor,
     require_approver,
-    verify_api_key,
+    verify_ingest_auth,
 )
 from sentinel_backend.db.session import get_db
 from sentinel_backend.models.approval import Approval
@@ -35,7 +35,7 @@ router = APIRouter(tags=["governance"])
 @router.post(
     "/api/approvals/request",
     response_model=ApprovalDTO,
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(verify_ingest_auth)],
 )
 async def post_approval_request(
     body: ApprovalRequestCreate,
@@ -47,7 +47,7 @@ async def post_approval_request(
 
 @router.get(
     "/api/approvals/{approval_id}/wait",
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(verify_ingest_auth)],
 )
 async def wait_approval(
     approval_id: str,

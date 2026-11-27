@@ -12,6 +12,7 @@ dependencies = [
     "langchain-core>=1.8.2",
     "opentelemetry-api>=1.45.2",
     "pydantic>=2.14.3",
+    "wrapt>=2.5.2",
 ]
 
 [build-system]

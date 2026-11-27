@@ -25,6 +25,8 @@ import {
 } from '@/types/telemetry';
 import {
   type LoginResponse,
+  TOKEN_KEY,
+  clearAuthSession,
   getStoredToken,
   getStoredUser,
   setAuthSession,
@@ -110,6 +112,12 @@ export async function apiFetch<T>(
   });
 
   if (!res.ok) {
+    if (res.status === 401 && typeof window !== 'undefined') {
+      const hasRawToken = Boolean(window.localStorage.getItem(TOKEN_KEY));
+      if (token || hasRawToken) {
+        clearAuthSession();
+      }
+    }
     let errorDetail = `${res.status} ${res.statusText}`;
     try {
       const errJson = await res.json();
@@ -126,29 +134,46 @@ export async function apiFetch<T>(
 }
 
 /**
+ * Verify the stored JWT session against GET /api/auth/me and clear it on 401/403.
+ */
+export async function verifyCurrentSession(): Promise<boolean> {
+  const token = getStoredToken();
+  if (!token) {
+    return false;
+  }
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/auth/me`, {
+      cache: 'no-store',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    if (res.status === 401 || res.status === 403) {
+      clearAuthSession();
+      return false;
+    }
+    return res.ok;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Fetch all registered agents with dynamic health_status and active_runs_count.
  */
 export async function fetchAgents(): Promise<AgentResponse[]> {
-  const res = await fetch(`${API_BASE_URL}/api/agents`, {
+  return apiFetch('/api/agents', {
     cache: 'no-store',
   });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch agents: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
 }
 
 /**
  * Fetch per-agent Service Level Objective (SLO) metrics.
  */
 export async function fetchAgentSlos(): Promise<AgentSloDTO[]> {
-  const res = await fetch(`${API_BASE_URL}/api/agents/slos`, {
+  return apiFetch('/api/agents/slos', {
     cache: 'no-store',
   });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch agent SLOs: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
 }
 
 /**
@@ -157,91 +182,63 @@ export async function fetchAgentSlos(): Promise<AgentSloDTO[]> {
 export async function fetchRuns(
   params?: FetchRunsParams
 ): Promise<RunListItemResponse[]> {
-  const url = new URL(`${API_BASE_URL}/api/runs`);
+  const search = new URLSearchParams();
   if (params) {
-    if (params.status) url.searchParams.set('status', params.status);
-    if (params.team) url.searchParams.set('team', params.team);
-    if (params.agent_id) url.searchParams.set('agent_id', params.agent_id);
+    if (params.status) search.set('status', params.status);
+    if (params.team) search.set('team', params.team);
+    if (params.agent_id) search.set('agent_id', params.agent_id);
     if (params.limit !== undefined) {
-      url.searchParams.set('limit', String(params.limit));
+      search.set('limit', String(params.limit));
     }
     if (params.offset !== undefined) {
-      url.searchParams.set('offset', String(params.offset));
+      search.set('offset', String(params.offset));
     }
   }
-
-  const res = await fetch(url.toString(), {
+  const qs = search.toString();
+  return apiFetch(`/api/runs${qs ? `?${qs}` : ''}`, {
     cache: 'no-store',
   });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch runs: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
 }
 
 /**
  * Fetch detailed RunSummaryDTO by run ID.
  */
 export async function fetchRunById(runId: string): Promise<RunSummaryDTO> {
-  const res = await fetch(
-    `${API_BASE_URL}/api/runs/${encodeURIComponent(runId)}`,
-    {
-      cache: 'no-store',
-    }
-  );
-  if (!res.ok) {
-    throw new Error(`Failed to fetch run ${runId}: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  return apiFetch(`/api/runs/${encodeURIComponent(runId)}`, {
+    cache: 'no-store',
+  });
 }
 
 /**
  * Fetch LineageGraphDTO for a given run ID.
  */
 export async function fetchRunLineage(runId: string): Promise<LineageGraphDTO> {
-  const res = await fetch(
-    `${API_BASE_URL}/api/runs/${encodeURIComponent(runId)}/lineage`,
-    {
-      cache: 'no-store',
-    }
-  );
-  if (!res.ok) {
-    throw new Error(`Failed to fetch lineage for run ${runId}: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  return apiFetch(`/api/runs/${encodeURIComponent(runId)}/lineage`, {
+    cache: 'no-store',
+  });
 }
 
 /**
  * Fetch chronological spans for audit replay timeline by run ID.
  */
 export async function fetchRunEvents(runId: string): Promise<SpanDTO[]> {
-  const res = await fetch(
-    `${API_BASE_URL}/api/runs/${encodeURIComponent(runId)}/events`,
-    {
-      cache: 'no-store',
-    }
-  );
-  if (!res.ok) {
-    throw new Error(`Failed to fetch events for run ${runId}: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+  return apiFetch(`/api/runs/${encodeURIComponent(runId)}/events`, {
+    cache: 'no-store',
+  });
 }
 
 /**
  * Fetch approval requests, optionally filtered by status ('PENDING', 'APPROVED', 'REJECTED').
  */
 export async function fetchApprovals(status?: string): Promise<ApprovalDTO[]> {
-  const url = new URL(`${API_BASE_URL}/api/approvals`);
+  const search = new URLSearchParams();
   if (status) {
-    url.searchParams.set('status', status);
+    search.set('status', status);
   }
-  const res = await fetch(url.toString(), {
+  const qs = search.toString();
+  return apiFetch(`/api/approvals${qs ? `?${qs}` : ''}`, {
     cache: 'no-store',
   });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch approvals: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
 }
 
 /**
@@ -297,79 +294,52 @@ export async function fetchAlerts(params?: {
   acknowledged?: boolean;
   limit?: number;
 }): Promise<AlertDTO[]> {
-  const url = new URL(`${API_BASE_URL}/api/alerts`);
+  const search = new URLSearchParams();
   if (params) {
     if (params.run_id) {
-      url.searchParams.set('run_id', params.run_id);
+      search.set('run_id', params.run_id);
     }
     if (params.acknowledged !== undefined) {
-      url.searchParams.set('acknowledged', String(params.acknowledged));
+      search.set('acknowledged', String(params.acknowledged));
     }
     if (params.limit !== undefined) {
-      url.searchParams.set('limit', String(params.limit));
+      search.set('limit', String(params.limit));
     }
   }
-  const res = await fetch(url.toString(), {
+  const qs = search.toString();
+  return apiFetch(`/api/alerts${qs ? `?${qs}` : ''}`, {
     cache: 'no-store',
   });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch alerts: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
 }
 
 /**
  * Mark an anomaly alert as acknowledged.
  */
 export async function acknowledgeAlert(alertId: string): Promise<AlertDTO> {
-  const res = await fetch(
-    `${API_BASE_URL}/api/alerts/${encodeURIComponent(alertId)}/ack`,
-    {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    }
-  );
-  if (!res.ok) {
-    let errorDetail = `${res.status} ${res.statusText}`;
-    try {
-      const errJson = await res.json();
-      if (errJson && errJson.detail) {
-        errorDetail = errJson.detail;
-      }
-    } catch {
-      // fallback
-    }
-    throw new Error(errorDetail);
-  }
-  return res.json();
+  return apiFetch(`/api/alerts/${encodeURIComponent(alertId)}/ack`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
 }
 
 /**
  * Fetch fleet cost summary and slice breakdowns by agent, team, model, and run.
  */
 export async function fetchCostSummary(): Promise<CostSummaryDTO> {
-  const res = await fetch(`${API_BASE_URL}/api/costs/summary`, {
+  return apiFetch('/api/costs/summary', {
     cache: 'no-store',
   });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch cost summary: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
 }
 
 /**
  * Fetch all pricing version rows ordered by effective_from descending.
  */
 export async function fetchPricingVersions(): Promise<PricingVersionDTO[]> {
-  const res = await fetch(`${API_BASE_URL}/api/costs/pricing`, {
+  return apiFetch('/api/costs/pricing', {
     cache: 'no-store',
   });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch pricing versions: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
 }
 
 /**

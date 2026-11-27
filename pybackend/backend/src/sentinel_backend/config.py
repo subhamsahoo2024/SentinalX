@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     LOOP_WINDOW_SECONDS: int
     RUN_TOKEN_BUDGET: int
     RUN_STALL_TIMEOUT_SEC: int
+    INGEST_RATE_LIMIT_PER_MIN: int = 600
+    RETENTION_DAYS: int = 30
 
 
 settings = Settings()

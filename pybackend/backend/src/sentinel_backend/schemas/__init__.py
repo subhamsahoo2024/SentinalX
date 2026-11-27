@@ -42,6 +42,12 @@ from sentinel_backend.schemas.telemetry import (
     TelemetryBatchRequest,
     TokenUsage,
 )
+from sentinel_backend.schemas.webhooks import (
+    WebhookCreate,
+    WebhookDTO,
+    WebhookEventType,
+    WebhookUpdate,
+)
 
 __all__ = [
     "AgentSloDTO",
@@ -76,4 +82,8 @@ __all__ = [
     "SpanType",
     "TelemetryBatchRequest",
     "TokenUsage",
+    "WebhookCreate",
+    "WebhookDTO",
+    "WebhookEventType",
+    "WebhookUpdate",
 ]

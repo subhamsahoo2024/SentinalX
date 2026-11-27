@@ -13,7 +13,7 @@ from sentinel_backend.api.deps import (
     assert_team_access,
     get_current_actor,
     require_approver,
-    verify_api_key,
+    verify_ingest_auth,
 )
 from sentinel_backend.db.session import get_db
 from sentinel_backend.models.agent import Agent
@@ -269,7 +269,7 @@ async def cancel_run(
 @router.get(
     "/{run_id}/control-state",
     response_model=RunControlStateResponse,
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(verify_ingest_auth)],
 )
 async def get_run_control_state(
     run_id: str,

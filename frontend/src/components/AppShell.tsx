@@ -8,7 +8,16 @@ import { ApprovalProvider } from '@/components/governance/ApprovalContext';
 import { ApprovalModal } from '@/components/governance/ApprovalModal';
 import { useIsClient } from '@/hooks/use-is-client';
 import { useIsMobile } from '@/hooks/use-mobile';
-import { getAuthTokenSnapshot, subscribeAuth } from '@/lib/auth';
+import { verifyCurrentSession } from '@/lib/api';
+import {
+  TOKEN_KEY,
+  USER_KEY,
+  clearAuthSession,
+  getAuthTokenSnapshot,
+  getTokenExpirationMs,
+  isTokenExpired,
+  subscribeAuth,
+} from '@/lib/auth';
 
 function AuthGuard() {
   const pathname = usePathname();
@@ -21,9 +30,53 @@ function AuthGuard() {
   );
 
   useEffect(() => {
-    if (isClient && !token && pathname !== '/login') {
-      router.replace('/login');
+    if (!isClient) return;
+
+    if (!token) {
+      if (
+        window.localStorage.getItem(TOKEN_KEY) ||
+        window.localStorage.getItem(USER_KEY)
+      ) {
+        clearAuthSession();
+      }
+      if (pathname !== '/login') {
+        router.replace('/login');
+      }
+      return;
     }
+
+    let cancelled = false;
+    void verifyCurrentSession().then((valid) => {
+      if (!cancelled && !valid && pathname !== '/login') {
+        router.replace('/login');
+      }
+    });
+
+    const expMs = getTokenExpirationMs(token);
+    const delayMs = expMs !== null ? Math.max(0, expMs - Date.now()) : 0;
+    const expiryTimer =
+      expMs !== null && delayMs <= 2_147_483_647
+        ? setTimeout(() => {
+            clearAuthSession();
+          }, delayMs)
+        : null;
+
+    const handleVisibilityOrFocus = () => {
+      if (isTokenExpired(token)) {
+        clearAuthSession();
+      }
+    };
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+    return () => {
+      cancelled = true;
+      if (expiryTimer !== null) {
+        clearTimeout(expiryTimer);
+      }
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+    };
   }, [isClient, token, pathname, router]);
 
   return null;

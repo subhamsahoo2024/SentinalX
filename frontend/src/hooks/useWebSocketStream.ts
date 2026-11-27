@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { getAuthTokenSnapshot, subscribeAuth } from '@/lib/auth';
 
 export type WebSocketConnectionStatus = 'connecting' | 'connected' | 'disconnected';
 
@@ -36,6 +37,11 @@ export function useWebSocketStream<T = unknown>(
 ): UseWebSocketStreamResult<T> {
   const [status, setStatus] = useState<WebSocketConnectionStatus>('connecting');
   const [lastMessage, setLastMessage] = useState<T | null>(null);
+  const token = useSyncExternalStore(
+    subscribeAuth,
+    getAuthTokenSnapshot,
+    () => null,
+  );
 
   const socketRef = useRef<WebSocket | null>(null);
   const connectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -63,9 +69,15 @@ export function useWebSocketStream<T = unknown>(
     }
 
     if (!isMountedRef.current) return;
+    if (!token) {
+      setStatus('disconnected');
+      return;
+    }
 
     const cleanPath = path.startsWith('/') ? path : `/${path}`;
-    const targetUrl = `${WS_BASE_URL}${cleanPath}`;
+    const baseTarget = `${WS_BASE_URL}${cleanPath}`;
+    const separator = baseTarget.includes('?') ? '&' : '?';
+    const targetUrl = `${baseTarget}${separator}token=${encodeURIComponent(token)}`;
 
     try {
       const ws = new WebSocket(targetUrl);
@@ -125,7 +137,7 @@ export function useWebSocketStream<T = unknown>(
         }
       }, delay);
     }
-  }, [path]);
+  }, [path, token]);
 
   useEffect(() => {
     connectRef.current = connect;

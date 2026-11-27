@@ -9,6 +9,7 @@ from sentinel_backend.models.run import Run
 from sentinel_backend.models.span import Span
 from sentinel_backend.models.team import Team
 from sentinel_backend.models.user import UserAccount
+from sentinel_backend.models.webhook import WebhookEndpoint
 
 __all__ = [
     "Agent",
@@ -22,4 +23,5 @@ __all__ = [
     "Span",
     "Team",
     "UserAccount",
+    "WebhookEndpoint",
 ]
