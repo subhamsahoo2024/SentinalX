@@ -1,243 +1,241 @@
+<p align="center">
+  <img src="frontend/public/assets/logo.png" alt="SENTINEL-X - Observe, Govern, Orchestrate" width="300" style="border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.15);" />
+</p>
+
 # SENTINEL-X
 
-> **Framework-neutral observability and runtime-governance control tower for multi-agent AI systems.**
+**Framework-neutral observability, lineage tracing, and runtime-governance control tower for multi-agent AI systems.**
 
-SENTINEL-X delivers unified real-time execution telemetry, interactive lineage directed acyclic graphs (DAGs), deterministic causal anomaly detection, versioned cost attribution without double-counting, chronological execution replay, and synchronous human-in-the-loop (HITL) pre-execution governance gates with role-based access control (RBAC).
+SENTINEL-X ingests structured spans from Python agent SDKs, zero-touch OpenAI/LangChain wrappers, and OpenTelemetry OTLP/HTTP exporters, builds interactive execution lineage DAGs in real time, evaluates deterministic causal anomalies, enforces synchronous Human-in-the-Loop (HITL) and budget gates before dangerous actions execute, and isolates telemetry across multi-tenant organizational teams.
 
 ---
 
-## Architecture Overview: Dual-Plane Control Tower
+## Key Features
 
-SENTINEL-X is architected with two distinct, decoupled operational planes:
+### 1. Framework-Neutral Telemetry & Zero-Touch Instrumentation
+- **Canonical Event v1.0 & OTLP/HTTP Ingestion:** Accepts native batches on `POST /api/telemetry/events` and OpenTelemetry `application/json` / `application/x-protobuf` traces on `POST /v1/traces`.
+- **Two-Line Auto-Instrumentation:** Calling `sentinel_sdk.instrument(...)` monkey-patches sync and async OpenAI clients (supporting OpenAI, Groq, Google Gemini, Ollama, Hugging Face) and attaches LangChain tool callbacks with zero `@trace_*` decorators.
+- **Explicit Decorators & Context Propagation:** Use `@trace_agent`, `@trace_llm`, `@trace_tool`, `start_run(...)`, and `SentinelLangChainCallback` when fine-grained span control is needed.
+- **Built-in PII & Secret Redaction:** Recursively masks sensitive fields (`token`, `secret`, `password`, `api_key`, `authorization`, credentials/PII patterns) in `sentinel_sdk` before telemetry leaves the agent process.
 
+### 2. Real-Time Execution Lineage, Replay & Cost Attribution
+- **Interactive Agent Lineage DAG:** Renders parent-child and cross-agent spans using React Flow (`@xyflow/react`) and Dagre (`@dagrejs/dagre`), alongside a Latency Waterfall and Span Inspector.
+- **Chronological Execution Replay:** Scrub step-by-step through a run's execution timeline in `/runs/[runId]`.
+- **Live WebSocket Streaming:** Redis Pub/Sub streams incremental `FLEET_UPDATED`, `RUN_UPDATED`, `SPAN_UPSERT`, `ALERT_CREATED`, `APPROVAL_REQUIRED`, and `APPROVAL_DECIDED` events to authenticated UI sessions.
+- **Versioned Cost Attribution (`/costs`):** Computes token and USD spend from effective pricing versions without double-counting nested agent spans (`EXACT`, `ESTIMATED`, and `UNKNOWN` cost basis).
+
+### 3. Deterministic Causal Anomaly Engine
+Evaluates every ingested batch and a background watchdog loop to detect:
+- **`LOOP_DETECTED`:** Repeated identical tool invocations within a sliding window.
+- **`BUDGET_EXCEEDED`:** Run token or USD cost limit breaches.
+- **`CASCADE_FAILURE`:** Upstream root-cause tracing (`is_root_cause`) linking downstream impacted spans to the earliest failing tool or parent span.
+- **`RUN_STALLED`:** Background stall watchdog transitioning silent in-flight runs (`RUN_STALL_TIMEOUT_SEC`) to `STALLED`.
+
+### 4. Runtime Governance, HITL Gates & Policies
+- **Synchronous HITL Pre-Execution Gate (`@gate_tool`):** Suspends high-risk tool execution in `AWAITING_APPROVAL`, emits alerts to `/approvals`, and wakes the suspended agent process via Redis Pub/Sub upon operator/approver decision.
+- **Operator Kill-Switch & Budget Circuit-Breaker:** Immediately cancels active runs (`POST /api/runs/{run_id}/cancel`) or trips `run:{run_id}:blocked` when `auto_block_on_budget` is enabled, halting subsequent LLM/tool calls with `RunCancelledError` or `BudgetCircuitBreakerError`.
+- **Hierarchical Governance Policies (`/policies`):** Configure org-wide, team-scoped, or agent-scoped token limits, USD spend caps, loop thresholds, and circuit breakers.
+
+### 5. Multi-Tenant Security, Webhooks & Operational Hardening
+- **RBAC & Team Isolation:** Enforces `viewer`, `operator`, `approver`, and `admin` permissions with strict team scoping across REST endpoints and WebSocket streams, separating production teams from `demo-sandbox`.
+- **Team-Bound Ingestion Keys (`/settings/api-keys`):** Admins can mint and soft-revoke `sk_live_...` API keys stored as SHA-256 digests; the server stamps every ingested event with the key's bound team.
+- **Tamper-Evident Audit Log:** Records governance, policy, user, API key, and webhook mutations in an append-only SHA-256 hash-chained `audit_events` table.
+- **Outbound Incident Webhooks (`/settings/webhooks`):** Delivers signed (`X-Sentinel-Signature: t=<ts>,v1=<hmac_sha256>`) JSON notifications with exponential backoff retries on `APPROVAL_REQUIRED`, `CASCADE_FAILURE`, `LOOP_DETECTED`, `BUDGET_EXCEEDED`, and `RUN_STALLED`.
+- **Rate Limiting & Retention:** Enforces atomic Redis Lua sliding-window ingestion limits (`INGEST_RATE_LIMIT_PER_MIN`) per team and purges expired telemetry older than `RETENTION_DAYS` while preserving immutable `audit_events`.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Agents["AI Agents (sentinel_sdk / OTLP)"] -->|"POST /api/telemetry/events & /v1/traces (X-API-Key)"| API["FastAPI Backend (:8000)"]
+    Agents <-->|"HITL Wait & Runtime Control"| API
+    API -->|"SQLAlchemy Async"| PG[("PostgreSQL 16")]
+    API <-->|"Pub/Sub, Rate Limit & Circuit Breaker"| Redis[("Redis 7")]
+    API -->|"Signed HMAC-SHA256"| Hooks["External Webhooks (Slack / PagerDuty / SIEM)"]
+    API <-->|"REST + Team-Filtered WebSockets"| UI["Next.js 16 Control Tower (:3000)"]
 ```
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                               SENTINEL-X CONTROL TOWER                                 │
-├──────────────────────────────────────────┬─────────────────────────────────────────────┤
-│  1. Asynchronous Telemetry Plane         │  2. Synchronous Governance (HITL) Plane     │
-│  (Non-blocking Observability)            │  (Pre-Execution Enforcement Gate)           │
-├──────────────────────────────────────────┼─────────────────────────────────────────────┤
-│ • Framework-neutral decorators:          │ • High-risk tool barrier:                   │
-│   @trace_agent, @trace_tool,             │   @gate_tool(risk_level, policy_reason)     │
-│   mock_llm_completion, start_run         │                                             │
-│ • Local in-memory buffering & auto PII   │ • Synchronous workflow block:               │
-│   redaction (keys, tokens, secrets)      │   Enters AWAITING_APPROVAL status           │
-│ • Idempotent batch event ingestion:      │ • Instant wakeup via Redis Pub/Sub channel: │
-│   POST /api/telemetry/events             │   approval:{approval_id}:decision           │
-│ • Redis Pub/Sub live streaming:          │ • RBAC authorization on decisions:          │
-│   fleet:stream & run:{runId}:stream      │   approver / admin roles only               │
-│ • Real-time Lineage DAG & Anomaly Engine │ • Append-only immutable audit trail:        │
-│   (loops, budgets, stalls, cascades)     │   audit_events table                        │
-└──────────────────────────────────────────┴─────────────────────────────────────────────┘
+
+## Repository Structure
+
+```text
+sentinalX/
+├── .github/workflows/ci.yml   # GitHub Actions CI (Postgres/Redis services, Ruff, Alembic, Pytest, Next.js build)
+├── .env.example               # Baseline environment configuration template
+├── Makefile                   # Developer shortcuts for Docker, migrations, servers, tests, and demos
+├── docker-compose.yml         # Full-stack multi-container orchestration (postgres, redis, backend, frontend)
+├── frontend/                  # Next.js 16 + React 19 + TypeScript Control Tower UI (see frontend/README.md)
+└── pybackend/                 # Python 3.12 uv workspace: sentinel-sdk, sentinel-backend, sentinel-demo (see pybackend/README.md)
 ```
 
-### 1. Asynchronous Telemetry Ingestion Plane
-- **Zero-Friction Instrumentation**: Lightweight `@trace_agent` and `@trace_tool` decorators instrument arbitrary Python multi-agent workflows without coupling to specific agent frameworks (LangChain, AutoGen, CrewAI, or custom loops).
-- **Client-Side PII Redaction**: Sensitive attributes matching credential patterns (`token`, `secret`, `password`, `api_key`, `authorization`) are automatically masked at the SDK layer before leaving the runtime environment.
-- **Canonical Event Schema v1.0**: Standardized schema across `AGENT`, `LLM`, `TOOL`, and `APPROVAL` spans.
-- **Deterministic Anomaly Engine**:
-  - **Repeated Tool Loops (`LOOP_DETECTED`)**: Flags 3+ identical tool signatures executed within a sliding time window (default 30s).
-  - **Token Budget Overruns (`BUDGET_EXCEEDED`)**: Identifies cumulative token consumption exceeding thresholds (default 5,000 tokens) and pinpoints highest-consumption spans.
-  - **Cascading Failures (`CASCADE_FAILURE`)**: Traces multi-tier error propagation back to the root-cause origin span.
-  - **Stalled Runs (`RUN_STALLED`)**: Watchdog monitors active runs and transitions silent workflows to `STALLED` after timeout thresholds (default 25s).
-- **Versioned Cost Attribution**: Leaf-level token pricing with provider versions, preventing double-counting on parent agent wrappers, with explicit tracking of missing/unmetered token spans.
-
-### 2. Synchronous Human-in-the-Loop (HITL) Control Plane
-- **Pre-Execution Barrier**: High-risk operations decorated with `@gate_tool` pause execution before side effects take place.
-- **Synchronous Redis Wakeup**: The SDK issues an approval request (`POST /api/approvals/request`) and suspends execution on a long-polling wakeup listener (`GET /api/approvals/{id}/wait`) subscribing to `approval:{id}:decision`.
-- **Role-Based Access Control (RBAC)**: Operator/viewer roles receive `403 Forbidden` on governance decisions; only authorized `approver` and `admin` actors can approve or reject actions.
-- **Append-Only Audit Log**: Every governance decision is recorded in the immutable `audit_events` table with actor context, timestamp, and rationale.
+For detailed module documentation, see:
+- [Frontend README](frontend/README.md)
+- [Python Backend & SDK README](pybackend/README.md)
 
 ---
 
 ## Tech Stack
 
-- **Backend**: Python 3.12, FastAPI (Async REST + WebSockets), SQLAlchemy 2.0 (asyncpg), Alembic, Pydantic v2, OpenTelemetry API, `uv` Workspace.
-- **Storage & Streaming**: PostgreSQL 16 (relational telemetry & audit logs), Redis 7 (live WebSocket streaming & HITL wakeup).
-- **Frontend**: Next.js 15 (App Router), TypeScript (strict mode), Tailwind CSS, `@xyflow/react` + `@dagrejs/dagre` (Lineage DAG), `lucide-react`, `date-fns`.
+- **Backend & SDK:** Python 3.12 (`uv` workspace), FastAPI, SQLAlchemy 2.0 (`asyncpg`), Alembic, PostgreSQL 16, Redis 7, Pydantic v2, Argon2 + JWT, `httpx`, `wrapt`, OpenTelemetry Proto.
+- **Frontend:** Next.js 16 (App Router, Turbopack), React 19, TypeScript (`strict: true`), Tailwind CSS v4, `@xyflow/react`, `@dagrejs/dagre`, `lucide-react`, `date-fns`.
+- **Infrastructure & CI:** Docker multi-stage non-root images, Docker Compose healthchecks, GitHub Actions.
 
 ---
 
-## Quickstart
+## Quick Start
 
-### Option A: Full-Stack Docker Deployment (Recommended)
+### 1. Configure Environment Variables
 
-Start the entire Sentinel platform (PostgreSQL, Redis, FastAPI Backend, and Next.js Frontend) with a single command:
+Copy `.env.example` to `.env` in the repository root and adjust values if needed:
 
 ```bash
-docker compose up --build
+cp .env.example .env
 ```
 
-- **Frontend Console**: [http://localhost:3000](http://localhost:3000)
-  - Fleet Overview & KPI Dashboard: `/`
-  - Interactive Lineage DAG & Execution Replay: `/runs/[runId]`
-  - Human-in-the-Loop Governance Queue: `/approvals`
-  - Versioned Cost Attribution & Rate Editor: `/costs`
-- **FastAPI OpenAPI Docs**: [http://localhost:8000/docs](http://localhost:8000/docs)
-- **PostgreSQL**: `localhost:5432` (`sentinel` / `sentinel_dev` / `sentinel_x`)
-- **Redis**: `localhost:6379`
+Key settings in `.env`:
+- `DATABASE_URL`, `REDIS_URL`
+- `SENTINEL_API_KEY` (default ingestion key for local dev / demo sandbox)
+- `JWT_SECRET`, `ENABLE_DEMO_SANDBOX=true`, `ALLOW_DEV_HEADERS=true`
+- `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_PASSWORD` (optional bootstrap org admin on first boot)
+- `LOOP_THRESHOLD_COUNT`, `LOOP_WINDOW_SECONDS`, `RUN_TOKEN_BUDGET`, `RUN_STALL_TIMEOUT_SEC`
+- `INGEST_RATE_LIMIT_PER_MIN=600`, `RETENTION_DAYS=30`
+- `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_WS_URL`
+- Optional live LLM config: `SENTINEL_LIVE_LLM`, `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`
 
-To shut down containers and volumes:
+### 2. Run with Docker Compose (Recommended)
+
 ```bash
-docker compose down -v
+make docker-up
+# or: docker compose up --build
+```
+
+Services started:
+- **PostgreSQL 16:** `localhost:5432`
+- **Redis 7:** `localhost:6379`
+- **FastAPI Backend:** `http://localhost:8000` (auto-runs `alembic upgrade head` on startup; healthcheck at `/health`)
+- **Next.js Control Tower:** `http://localhost:3000`
+
+### 3. Run Locally for Active Development
+
+Start Postgres and Redis, run migrations, and launch backend & frontend dev servers in separate terminals:
+
+```bash
+# Terminal 1: Start Postgres & Redis
+make infra-up
+
+# Install Python dependencies & apply database migrations
+cd pybackend && uv sync --all-packages --dev && cd ..
+make migrate
+
+# Terminal 2: Start FastAPI backend (:8000)
+make backend-dev
+
+# Terminal 3: Start Next.js frontend (:3000)
+cd frontend && npm install && cd ..
+make frontend-dev
 ```
 
 ---
 
-### Option B: Local Development Mode (`uv` + `npm`)
+## How to Use SENTINEL-X
 
-#### 1. Start Infrastructure
-```bash
-# Start PostgreSQL and Redis containers with healthchecks
-docker compose up -d postgres redis
+### 1. Sign In to the Control Tower
+Open `http://localhost:3000`.
+- **Demo Sandbox Mode (`ENABLE_DEMO_SANDBOX=true`):** Seeded demo accounts (password `sentinel123`) are scoped to `demo-sandbox`:
+  - `admin@sentinel.local` (`admin`)
+  - `approver@sentinel.local` (`approver`)
+  - `operator@sentinel.local` (`operator`)
+  - `viewer@sentinel.local` (`viewer`)
+- **Organizational Mode:** Configure `INITIAL_ADMIN_EMAIL` and `INITIAL_ADMIN_PASSWORD` in `.env` (or register the initial admin from `/login` when bootstrap is needed), then manage organizational teams/users under `/settings/users`.
+
+### 2. Mint a Team-Bound API Key
+As a non-demo organization Admin:
+1. Navigate to **`/settings/api-keys`** in the sidebar.
+2. Click **Mint Team API Key**, enter a cluster/service name, and select a target team (e.g., `fraud-detection`).
+3. Copy the one-time `sk_live_...` secret (stored server-side as a SHA-256 hash). All telemetry sent with this key is automatically stamped with that team.
+
+### 3. Instrument an Agent
+
+**Option A — Zero-Touch OpenAI Auto-Instrumentation (2 lines):**
+
+```python
+import openai
+import sentinel_sdk
+
+sentinel_sdk.instrument(
+    api_key="sk_live_...",
+    base_url="http://localhost:8000",
+    agent_id="fraud-scoring-service",
+)
+
+client = openai.OpenAI()
+response = client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[{"role": "user", "content": "Score transaction tx_1042"}],
+)
 ```
 
-#### 2. Backend Setup & Migrations
+**Option B — Explicit Decorators & HITL Gate:**
+
+```python
+from sentinel_sdk import gate_tool, start_run, trace_agent, trace_tool
+
+@gate_tool(risk_level="HIGH", reason="Executes external wire transfer")
+def execute_wire_transfer(account_id: str, amount: float) -> dict:
+    return {"status": "sent", "account_id": account_id, "amount": amount}
+
+@trace_agent(agent_id="payments-orchestrator")
+def handle_payment(account_id: str, amount: float) -> dict:
+    return execute_wire_transfer(account_id=account_id, amount=amount)
+
+with start_run(agent_id="payments-orchestrator"):
+    handle_payment("acct_991", 25000.0)
+```
+
+**Option C — Standard OpenTelemetry OTLP/HTTP:**
+Point any OpenTelemetry SDK `OTLPSpanExporter` to `http://localhost:8000/v1/traces` with header `X-API-Key: sk_live_...`.
+
+### 4. Run Built-In Demo Scenarios
+
 ```bash
-# Navigate to the Python workspace
+make demo-normal     # Multi-agent delegation tree
+make demo-hitl       # Synchronous Human-in-the-Loop approval gate (approve/reject in /approvals)
+make demo-loop       # Repeated tool loop detection
+make demo-slow_loop  # Slow loop + live operator kill-switch cancellation
+make demo-budget     # Token/cost budget overrun & circuit breaker
+make demo-cascade    # Root-cause cascading failure tracing
+make demo-stall      # Run stall watchdog detection
+```
+
+Run the standalone zero-touch OpenAI example (offline mock by default, or set `SENTINEL_LIVE_LLM=true`):
+
+```bash
 cd pybackend
-
-# Sync all workspace dependencies
-uv sync
-
-# Run database migrations
-uv run --package sentinel-backend alembic -c backend/alembic.ini upgrade head
-
-# Start FastAPI development server on port 8000
-uv run --package sentinel-backend fastapi dev backend/src/sentinel_backend/main.py --port 8000
+SENTINEL_API_KEY="sk_live_YOUR_TEAM_KEY" uv run --package sentinel-demo python -m sentinel_demo.zero_touch_example
 ```
 
-#### 3. Frontend Setup
+### 5. Configure Governance & Webhooks
+- **`/policies`:** Create token limits, cost caps, loop thresholds, and `auto_block_on_budget` rules per org, team, or agent.
+- **`/approvals`:** Review pending tool executions triggered by `@gate_tool` and inspect the tamper-evident audit trail.
+- **`/costs`:** Track fleet spend and manage versioned model input/output pricing rates.
+- **`/settings/webhooks`:** Register endpoints for `APPROVAL_REQUIRED`, `CASCADE_FAILURE`, `LOOP_DETECTED`, `BUDGET_EXCEEDED`, and `RUN_STALLED`, verify `X-Sentinel-Signature`, and trigger `Send Test Ping`.
+
+---
+
+## Testing & Verification
+
 ```bash
-# In a separate terminal, navigate to the frontend directory
+# Backend lint + full test suite (requires Postgres & Redis running)
+cd pybackend
+uv run ruff check .
+uv run pytest -v
+
+# 10-scenario deterministic evaluation suite
+make eval
+
+# Frontend type check, lint, and production build
 cd frontend
-
-# Install dependencies
-npm ci
-
-# Start Next.js development server on port 3000
-npm run dev
+npx tsc --noEmit && npm run lint && npm run build
 ```
-
----
-
-## Reproducible Multi-Agent Demo Scenarios
-
-SENTINEL-X includes an IT Incident Triage multi-agent demo (`sentinel-demo`) reproducing real-world enterprise operational conditions.
-
-Run each scenario using `uv` from the repository root or `pybackend/` directory:
-
-### 1. Normal Multi-Agent Delegation
-Coordinator delegates to diagnostic and remediation agents; workflow completes cleanly with status `SUCCEEDED`.
-```bash
-cd pybackend
-uv run --package sentinel-demo python -m sentinel_demo.runner --scenario normal
-```
-
-### 2. Human-in-the-Loop (HITL) Governance Gate
-Triggers a high-risk `@gate_tool` action (`restart_production_cluster`). Workflow transitions to `AWAITING_APPROVAL` and pauses until an authorized approver decides the request in the web console at [http://localhost:3000/approvals](http://localhost:3000/approvals).
-```bash
-cd pybackend
-uv run --package sentinel-demo python -m sentinel_demo.runner --scenario hitl
-```
-
-### 3. Repeated Tool Loop (`LOOP_DETECTED`)
-Diagnostic agent executes 4 consecutive queries against a flaky endpoint with identical parameters, triggering a `LOOP_DETECTED` anomaly alert while preserving acyclic attempt nodes in the Lineage DAG.
-```bash
-cd pybackend
-uv run --package sentinel-demo python -m sentinel_demo.runner --scenario loop
-```
-
-### 4. Token Budget Overrun (`BUDGET_EXCEEDED`)
-Verbose analysis agent generates ~7,500 tokens across multiple inference calls, breaching the configured token budget threshold (`RUN_TOKEN_BUDGET=5000`) and pinpointing the culprit LLM span.
-```bash
-cd pybackend
-uv run --package sentinel-demo python -m sentinel_demo.runner --scenario budget
-```
-
-### 5. Cascading Failure Chain (`CASCADE_FAILURE`)
-Corrupt schema fetch tool throws an unhandled `ValueError`, propagating downstream to trigger diagnostic and coordinator agent failures. Sentinel attributes `is_root_cause=True` to the upstream origin tool.
-```bash
-cd pybackend
-uv run --package sentinel-demo python -m sentinel_demo.runner --scenario cascade
-```
-
-### 6. Stalled Run Watchdog (`RUN_STALLED`)
-Agent starts and emits an initial `RUNNING` telemetry span before encountering silent execution hang. Sentinel's background watchdog identifies the stall after 25s, sets terminal status `STALLED`, and alerts operators.
-```bash
-cd pybackend
-uv run --package sentinel-demo python -m sentinel_demo.runner --scenario stall
-```
-
-#### Optional CLI Flags
-All demo scenarios support customization:
-```bash
-uv run --package sentinel-demo python -m sentinel_demo.runner \
-  --scenario normal \
-  --ticket-id "INC-9901" \
-  --team "sec-ops" \
-  --description "High latency detected on core auth gateway" \
-  --dashboard-host "http://localhost:3000"
-```
-
----
-
-## Automated Evaluation & Test Suite
-
-The test suite validates domain services, REST routes, WebSocket streaming, and all 10 core evaluation scenarios:
-
-```bash
-# Run all 68 backend tests (Lineage, Anomaly Engine, Governance, Costs, Evaluation)
-cd pybackend
-uv run pytest
-
-# Run the 10-scenario automated evaluation suite specifically
-uv run pytest backend/tests/test_evaluation_suite.py -v
-
-# Run code formatting and lint checks
-uv run ruff check
-```
-
-Frontend verification:
-```bash
-cd frontend
-npm run lint
-npm run build
-```
-
----
-
-## Repository Structure
-
-```
-sentinal-x/
-├── docker-compose.yml          # Full-stack composition (Postgres, Redis, Backend, Frontend)
-├── .env                        # Central environment configuration
-├── Makefile                    # Developer shortcut targets
-├── pybackend/                  # Python 3.12 uv workspace
-│   ├── pyproject.toml          # Workspace root configuration
-│   ├── sdk/                    # Non-blocking telemetry SDK & Canonical Event schema
-│   │   └── src/sentinel_sdk/
-│   ├── backend/                # FastAPI control tower & persistence layer
-│   │   ├── Dockerfile          # Container packaging for backend service
-│   │   ├── alembic/            # Database schema migrations
-│   │   └── src/sentinel_backend/
-│   │       ├── api/            # REST and WebSocket route handlers
-│   │       ├── db/             # SQLAlchemy asyncpg session setup
-│   │       ├── models/         # Postgres database models
-│   │       ├── schemas/        # Pydantic v2 DTOs
-│   │       └── services/       # Domain services (ingestion, lineage, costs, anomalies)
-│   └── demo_agents/            # Reproducible multi-agent scenario test harness
-│       └── src/sentinel_demo/
-└── frontend/                   # Next.js 15 App Router web console
-    ├── Dockerfile              # Multi-stage production container build
-    └── src/
-        ├── app/                # Next.js App Router routes (/runs/[runId], /approvals, /costs)
-        ├── components/         # Reusable UI domain components (DAG, Replay, Governance)
-        ├── hooks/              # Custom React hooks (useWebSocketStream)
-        ├── lib/                # Typed API client and styling utilities
-        └── types/              # TypeScript interfaces mirroring Canonical Event v1.0
-```
-
----
 

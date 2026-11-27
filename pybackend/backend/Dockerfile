@@ -5,7 +5,8 @@ FROM python:3.12-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 ENV UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    UV_PROJECT_ENVIRONMENT="/app/.venv"
 
 WORKDIR /workspace/pybackend
 
@@ -33,7 +34,7 @@ RUN groupadd -r sentinel && \
 
 WORKDIR /app
 
-COPY --from=builder --chown=sentinel:sentinel /workspace/pybackend/.venv /app/.venv
+COPY --from=builder --chown=sentinel:sentinel /app/.venv /app/.venv
 COPY --from=builder --chown=sentinel:sentinel /workspace/pybackend/backend/alembic.ini /app/backend/alembic.ini
 COPY --from=builder --chown=sentinel:sentinel /workspace/pybackend/backend/alembic /app/backend/alembic
 COPY --from=builder --chown=sentinel:sentinel /workspace/pybackend/backend/src /app/backend/src
