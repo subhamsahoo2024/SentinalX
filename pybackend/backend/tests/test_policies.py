@@ -370,6 +370,9 @@ async def test_api_create_policy_rbac_and_audit():
     mock_db.add = MagicMock()
     mock_db.commit = AsyncMock()
     mock_db.refresh = AsyncMock()
+    exec_res = MagicMock()
+    exec_res.scalar_one_or_none.return_value = None
+    mock_db.execute.return_value = exec_res
 
     app.dependency_overrides[get_db] = lambda: mock_db
     try:
@@ -447,6 +450,9 @@ async def test_api_update_policy():
     mock_db.add = MagicMock()
     mock_db.commit = AsyncMock()
     mock_db.refresh = AsyncMock()
+    exec_res = MagicMock()
+    exec_res.scalar_one_or_none.return_value = None
+    mock_db.execute.return_value = exec_res
 
     app.dependency_overrides[get_db] = lambda: mock_db
     try:
@@ -527,6 +533,9 @@ async def test_api_cancel_run():
     mock_db.add = MagicMock()
     mock_db.commit = AsyncMock()
     mock_db.refresh = AsyncMock()
+    exec_res = MagicMock()
+    exec_res.scalar_one_or_none.return_value = None
+    mock_db.execute.return_value = exec_res
 
     spans_mock = MagicMock()
     spans_mock.one.return_value = (5, 0)

@@ -375,16 +375,30 @@ def test_langchain_callback_error_handling():
     assert emitted[1].error.message == "Tool failed"
 
 
-def test_load_sdk_env_from_dotenv():
-    from sentinel_sdk.config import find_env_file, load_sdk_env
+def test_load_sdk_env_from_dotenv(tmp_path, monkeypatch):
+    import sentinel_sdk.config as sdk_config
 
-    env_path = find_env_file()
+    dotenv_file = tmp_path / ".env"
+    dotenv_file.write_text(
+        "SENTINEL_URL=http://localhost:8000/\nSENTINEL_API_KEY=dotenv-test-key\n",
+        encoding="utf-8",
+    )
+    fake_module_dir = tmp_path / "sdk" / "src" / "sentinel_sdk"
+    fake_module_dir.mkdir(parents=True)
+
+    monkeypatch.setattr(sdk_config, "__file__", str(fake_module_dir / "config.py"))
+    monkeypatch.setattr(sdk_config, "_env_loaded", False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("SENTINEL_URL", raising=False)
+    monkeypatch.delenv("SENTINEL_API_KEY", raising=False)
+
+    env_path = sdk_config.find_env_file()
     assert env_path is not None
-    assert env_path.name == ".env"
+    assert env_path.resolve() == dotenv_file.resolve()
 
-    url, api_key = load_sdk_env()
-    assert url.startswith("http")
-    assert len(api_key) > 0
+    url, api_key = sdk_config.load_sdk_env()
+    assert url == "http://127.0.0.1:8000"
+    assert api_key == "dotenv-test-key"
 
 
 def test_load_sdk_env_missing_raises_error(monkeypatch):

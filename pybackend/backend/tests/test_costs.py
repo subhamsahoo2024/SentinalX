@@ -499,6 +499,9 @@ async def test_post_pricing_requires_approver():
 async def test_post_pricing_success_and_audit_event():
     mock_db = AsyncMock()
     mock_db.add = MagicMock()
+    exec_res = MagicMock()
+    exec_res.scalar_one_or_none.return_value = None
+    mock_db.execute.return_value = exec_res
 
     async def fake_refresh(obj):
         if getattr(obj, "id", None) is None:

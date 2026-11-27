@@ -39,6 +39,7 @@ jobs:
       DATABASE_URL: postgresql+asyncpg://sentinel:sentinel_ci_password@localhost:5432/sentinel_test
       REDIS_URL: redis://localhost:6379/0
       SENTINEL_API_KEY: ci-test-key
+      SENTINEL_URL: http://127.0.0.1:8000
       JWT_SECRET: ci-test-jwt-secret-key-32-chars-min
       ENABLE_DEMO_SANDBOX: "true"
       ALLOW_DEV_HEADERS: "true"
