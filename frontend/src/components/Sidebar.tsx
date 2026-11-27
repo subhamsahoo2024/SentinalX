@@ -12,6 +12,7 @@ import {
   PanelLeftClose,
   ShieldCheck,
   Users,
+  Webhook,
 } from 'lucide-react';
 import { useApprovals } from '@/components/governance/ApprovalContext';
 import { useTheme } from '@/hooks/use-theme';
@@ -52,6 +53,7 @@ export function Sidebar({ isOpen, isMobile, onClose }: SidebarProps) {
           ...BASE_NAV_ITEMS,
           { href: '/settings/users', label: 'Users & Teams', icon: Users },
           { href: '/settings/api-keys', label: 'API Keys', icon: KeyRound },
+          { href: '/settings/webhooks', label: 'Webhooks', icon: Webhook },
         ]
       : BASE_NAV_ITEMS;
 

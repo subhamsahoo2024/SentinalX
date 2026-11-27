@@ -7,16 +7,18 @@ from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from sentinel_backend.config import settings
 from sentinel_backend.models.alert import Alert
+from sentinel_backend.models.approval import Approval
 from sentinel_backend.models.run import Run
 from sentinel_backend.models.span import Span
 from sentinel_backend.schemas.alerts import AlertDTO
 from sentinel_backend.services.policy_service import resolve_effective_policy
 from sentinel_backend.services.redis_bus import get_redis_client, publish_event
+from sentinel_backend.services.webhooks import enqueue_team_webhooks
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +77,7 @@ async def _upsert_alert(
     existing = result.scalar_one_or_none()
 
     now_utc = datetime.now(UTC)
+    is_new_alert = existing is None
 
     if existing is not None:
         existing.evidence = dict(evidence)
@@ -122,6 +125,8 @@ async def _upsert_alert(
         payload["team"] = team
     await publish_event(f"run:{run_id}:stream", "ALERT_CREATED", payload)
     await publish_event("fleet:stream", "ALERT_CREATED", payload)
+    if is_new_alert:
+        await enqueue_team_webhooks(db, team or "default", rule_id, payload)
 
     return alert_dto
 
@@ -628,9 +633,70 @@ async def stall_watchdog_loop(session_factory: Any = None) -> None:
         logger.info("Stall watchdog loop cancelled, exiting cleanly.")
 
 
+async def purge_expired_telemetry(db: AsyncSession) -> int:
+    """Delete expired runs (and dependent spans, alerts, approvals) beyond RETENTION_DAYS.
+
+    AuditEvent rows are immutable compliance records and are never deleted.
+    """
+    cutoff = datetime.now(UTC) - timedelta(days=settings.RETENTION_DAYS)
+    expired_stmt = select(Run.run_id).where(Run.started_at < cutoff)
+    expired_res = await db.execute(expired_stmt)
+    expired_run_ids = list(expired_res.scalars().all())
+    if not expired_run_ids:
+        return 0
+
+    await db.execute(
+        delete(Approval).where(Approval.run_id.in_(expired_run_ids))
+    )
+    await db.execute(delete(Alert).where(Alert.run_id.in_(expired_run_ids)))
+    await db.execute(delete(Span).where(Span.run_id.in_(expired_run_ids)))
+    await db.execute(delete(Run).where(Run.run_id.in_(expired_run_ids)))
+    await db.commit()
+
+    logger.info(
+        "Purged %d expired run(s) started before %s (retention=%d days)",
+        len(expired_run_ids),
+        cutoff.isoformat(),
+        settings.RETENTION_DAYS,
+    )
+    return len(expired_run_ids)
+
+
+async def retention_cleanup_loop(
+    session_factory: Any = None,
+    interval_seconds: int = 21600,
+) -> None:
+    """Infinite async loop running telemetry retention cleanup every 6 hours."""
+    if session_factory is None:
+        from sentinel_backend.db.session import async_session_maker
+
+        session_factory = async_session_maker
+
+    logger.info(
+        "Starting telemetry retention cleanup loop (retention=%d days, interval=%ds)",
+        settings.RETENTION_DAYS,
+        interval_seconds,
+    )
+    try:
+        while True:
+            try:
+                async with session_factory() as session:
+                    await purge_expired_telemetry(session)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Error in telemetry retention cleanup tick")
+
+            await asyncio.sleep(interval_seconds)
+    except asyncio.CancelledError:
+        logger.info("Retention cleanup loop cancelled, exiting cleanly.")
+
+
 __all__ = [
     "_upsert_alert",
     "check_stalled_runs",
     "evaluate_run_anomalies",
+    "purge_expired_telemetry",
+    "retention_cleanup_loop",
     "stall_watchdog_loop",
 ]

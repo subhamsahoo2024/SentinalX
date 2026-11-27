@@ -19,6 +19,7 @@ from sentinel_backend.schemas.governance import (
 )
 from sentinel_backend.services.audit import append_audit_event
 from sentinel_backend.services.redis_bus import publish_event, subscribe_channel
+from sentinel_backend.services.webhooks import enqueue_team_webhooks
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,12 @@ async def create_approval_request(
     # Publish APPROVAL_REQUIRED event
     await publish_event("fleet:stream", "APPROVAL_REQUIRED", payload)
     await publish_event(f"run:{req.run_id}:stream", "APPROVAL_REQUIRED", payload)
+    await enqueue_team_webhooks(
+        db,
+        run.team or "default",
+        "APPROVAL_REQUIRED",
+        payload,
+    )
 
     return dto
 

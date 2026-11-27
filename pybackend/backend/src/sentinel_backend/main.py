@@ -20,10 +20,14 @@ from sentinel_backend.api import (
     system,
     telemetry,
     users,
+    webhooks,
     ws,
 )
 from sentinel_backend.db.session import async_session_maker, engine
-from sentinel_backend.services.anomaly_engine import stall_watchdog_loop
+from sentinel_backend.services.anomaly_engine import (
+    retention_cleanup_loop,
+    stall_watchdog_loop,
+)
 from sentinel_backend.services.cost_calculator import seed_default_pricing
 from sentinel_backend.services.policy_service import seed_default_policy
 from sentinel_backend.services.redis_bus import (
@@ -48,14 +52,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     watchdog_task = asyncio.create_task(
         stall_watchdog_loop(async_session_maker)
     )
+    retention_task = asyncio.create_task(
+        retention_cleanup_loop(async_session_maker)
+    )
     try:
         yield
     finally:
-        watchdog_task.cancel()
-        try:
-            await watchdog_task
-        except asyncio.CancelledError:
-            pass
+        for task in (watchdog_task, retention_task):
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         # Gracefully shut down Redis connection pool and DB engine
         await close_redis()
         await engine.dispose()
@@ -101,6 +109,7 @@ app.include_router(approvals.router)
 app.include_router(alerts.router)
 app.include_router(costs.router)
 app.include_router(policies.router)
+app.include_router(webhooks.router)
 app.include_router(simulator.router)
 app.include_router(ws.router)
 

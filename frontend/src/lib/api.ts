@@ -22,6 +22,10 @@ import {
   SystemConfigDTO,
   TeamDTO,
   UserSummaryDTO,
+  WebhookCreateInput,
+  WebhookEndpointDTO,
+  WebhookTestResultDTO,
+  WebhookUpdateInput,
 } from '@/types/telemetry';
 import {
   type LoginResponse,
@@ -597,6 +601,68 @@ export async function revokeApiKey(
 ): Promise<{ status: string; key_id: string }> {
   return apiFetch(`/api/api-keys/${encodeURIComponent(keyId)}`, {
     method: 'DELETE',
+  });
+}
+
+/**
+ * List all configured outbound webhook endpoints (non-demo admin only).
+ */
+export async function fetchWebhooks(): Promise<WebhookEndpointDTO[]> {
+  return apiFetch('/api/webhooks', {
+    cache: 'no-store',
+  });
+}
+
+/**
+ * Create a new outbound incident webhook endpoint (non-demo admin only).
+ */
+export async function createWebhook(
+  payload: WebhookCreateInput
+): Promise<WebhookEndpointDTO> {
+  return apiFetch('/api/webhooks', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Update an outbound webhook endpoint configuration or enabled state.
+ */
+export async function updateWebhook(
+  webhookId: string,
+  payload: WebhookUpdateInput
+): Promise<WebhookEndpointDTO> {
+  return apiFetch(`/api/webhooks/${encodeURIComponent(webhookId)}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Delete an outbound webhook endpoint permanently.
+ */
+export async function deleteWebhook(
+  webhookId: string
+): Promise<{ status: string; webhook_id: string }> {
+  return apiFetch(`/api/webhooks/${encodeURIComponent(webhookId)}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * Trigger an immediate TEST_PING delivery to verify webhook connectivity.
+ */
+export async function testWebhook(
+  webhookId: string
+): Promise<WebhookTestResultDTO> {
+  return apiFetch(`/api/webhooks/${encodeURIComponent(webhookId)}/test`, {
+    method: 'POST',
   });
 }
 

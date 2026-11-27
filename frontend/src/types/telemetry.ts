@@ -302,6 +302,46 @@ export interface ApiKeyCreatedDTO extends ApiKeyDTO {
   raw_key: string;
 }
 
+export type WebhookEventType =
+  | 'APPROVAL_REQUIRED'
+  | 'CASCADE_FAILURE'
+  | 'LOOP_DETECTED'
+  | 'BUDGET_EXCEEDED'
+  | 'RUN_STALLED';
+
+export interface WebhookEndpointDTO {
+  webhook_id: string;
+  name: string;
+  team: string | null;
+  url: string;
+  signing_secret: string;
+  event_types: WebhookEventType[];
+  enabled: boolean;
+  last_status_code: number | null;
+  last_triggered_at: string | null;
+  created_at: string;
+}
+
+export interface WebhookCreateInput {
+  name: string;
+  team: string | null;
+  url: string;
+  event_types: WebhookEventType[];
+}
+
+export interface WebhookUpdateInput {
+  name?: string;
+  team?: string | null;
+  url?: string;
+  event_types?: WebhookEventType[];
+  enabled?: boolean;
+}
+
+export interface WebhookTestResultDTO {
+  delivered: boolean;
+  status_code: number | null;
+}
+
 export type ScenarioType =
   | 'normal'
   | 'hitl'

@@ -19,6 +19,7 @@ function resolveTitle(pathname: string): string {
   if (pathname.startsWith('/policies')) return 'Governance Policies';
   if (pathname.startsWith('/settings/users')) return 'Users & Teams';
   if (pathname.startsWith('/settings/api-keys')) return 'API Keys';
+  if (pathname.startsWith('/settings/webhooks')) return 'Outbound Webhooks';
   if (pathname.startsWith('/runs/')) return 'Run Execution Detail';
   return 'Control Tower';
 }
